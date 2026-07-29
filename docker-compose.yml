@@ -1,0 +1,45 @@
+services:
+  graphdb-geosparql-v1:
+    profiles:
+      - v1
+    image: ontotext/graphdb:11.4.0
+    container_name: graphdb-geosparql-v1
+    ports:
+      - "127.0.0.1:7201:7200"
+    environment:
+      SIS_DATA: ${GRAPHDB_SIS_DATA:-}
+      GDB_JAVA_OPTS: >-
+        -Xms2g -Xmx10g
+        -Dgraphdb.engine.onheap.allocation=false
+        -Dgraphdb.workbench.cors.enable=true
+        -Dgraphdb.workbench.cors.origin=*
+        -Dentity-pool-implementation=transactional
+    volumes:
+      - ./graphdb-home-geosparql-v1:/opt/graphdb/home
+      - ./sis-data:/opt/graphdb/sis-data:ro
+    restart: unless-stopped
+
+  graphdb-geosparql-v2:
+    profiles:
+      - v2
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GEOSPARQL_V2_REF: ${GEOSPARQL_V2_REF:-master}
+    image: graphdb-geosparql-v2:11.4.0
+    container_name: graphdb-geosparql-v2
+    ports:
+      - "127.0.0.1:7202:7200"
+    environment:
+      SIS_DATA: ${GRAPHDB_SIS_DATA:-}
+      GDB_JAVA_OPTS: >-
+        -Xms2g -Xmx10g
+        -Dgraphdb.engine.onheap.allocation=false
+        -Dgraphdb.workbench.cors.enable=true
+        -Dgraphdb.workbench.cors.origin=*
+        -Dentity-pool-implementation=transactional
+    volumes:
+      - ./graphdb-home-geosparql-v2:/opt/graphdb/home
+      - ./sis-data:/opt/graphdb/sis-data:ro
+    restart: unless-stopped

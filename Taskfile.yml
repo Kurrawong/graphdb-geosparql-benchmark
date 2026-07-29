@@ -1,0 +1,140 @@
+version: "3"
+
+vars:
+  DATA_DIR: downloads
+  DATA_FILE: mdv.osm.ttl
+  DATA_ARCHIVE: mdv.osm.ttl.bz2
+  DATA_URL: https://osm2rdf.cs.uni-freiburg.de/ttl/mdv.osm.ttl.bz2
+  REPOSITORY_ID: maldives
+  V2_REPOSITORY: https://github.com/Kurrawong/graphdb-geosparql-plugin.git
+
+tasks:
+  download-data:
+    desc: Download and unpack the Maldives OSM dataset
+    status:
+      - test -f "{{.DATA_DIR}}/{{.DATA_FILE}}"
+    cmds:
+      - mkdir -p "{{.DATA_DIR}}"
+      - >-
+        curl --fail --location --retry 3
+        --output "{{.DATA_DIR}}/{{.DATA_ARCHIVE}}.part"
+        "{{.DATA_URL}}"
+      - mv "{{.DATA_DIR}}/{{.DATA_ARCHIVE}}.part" "{{.DATA_DIR}}/{{.DATA_ARCHIVE}}"
+      - bzip2 --decompress --keep --force "{{.DATA_DIR}}/{{.DATA_ARCHIVE}}"
+
+  v1:up:
+    desc: Start and initialise GraphDB with the bundled GeoSPARQL v1 plugin
+    deps:
+      - download-data
+    cmds:
+      - docker compose --profile v2 down graphdb-geosparql-v2
+      - docker compose --profile v1 up --detach graphdb-geosparql-v1
+      - task: initialise
+        vars:
+          GRAPHDB_URL: http://localhost:7201
+
+  v1:down:
+    desc: Stop the GeoSPARQL v1 GraphDB container
+    cmds:
+      - docker compose --profile v1 down graphdb-geosparql-v1
+
+  v1:down-clean:
+    desc: Stop GeoSPARQL v1 and remove its GraphDB home
+    cmds:
+      - task: v1:down
+      - rm -rf ./graphdb-home-geosparql-v1
+
+  v2:build:
+    desc: Build the GeoSPARQL v2 image from master (or GEOSPARQL_V2_REF)
+    cmds:
+      - |
+        set -eu
+        plugin_ref="${GEOSPARQL_V2_REF:-master}"
+        if [ "$plugin_ref" = "master" ]; then
+          plugin_ref="$(git ls-remote "{{.V2_REPOSITORY}}" refs/heads/master | awk '{print $1}')"
+          if [ -z "$plugin_ref" ]; then
+            echo "Could not resolve the v2 master commit" >&2
+            exit 1
+          fi
+          echo "Building GeoSPARQL v2 commit $plugin_ref"
+        fi
+        GEOSPARQL_V2_REF="$plugin_ref" \
+          docker compose build --pull \
+          --build-arg GEOSPARQL_V2_REF="$plugin_ref" \
+          graphdb-geosparql-v2
+
+  v2:up:
+    desc: Build, start, and initialise GraphDB with the GeoSPARQL v2 plugin
+    deps:
+      - download-data
+      - v2:build
+    cmds:
+      - docker compose --profile v1 down graphdb-geosparql-v1
+      - docker compose --profile v2 up --detach graphdb-geosparql-v2
+      - task: initialise
+        vars:
+          GRAPHDB_URL: http://localhost:7202
+
+  v2:down:
+    desc: Stop the GeoSPARQL v2 GraphDB container
+    cmds:
+      - docker compose --profile v2 down graphdb-geosparql-v2
+
+  v2:down-clean:
+    desc: Stop GeoSPARQL v2 and remove its GraphDB home
+    cmds:
+      - task: v2:down
+      - rm -rf ./graphdb-home-geosparql-v2
+
+  initialise:
+    internal: true
+    requires:
+      vars:
+        - GRAPHDB_URL
+    cmds:
+      - |
+        set -eu
+        graphdb_url="{{.GRAPHDB_URL}}"
+        repository_id="{{.REPOSITORY_ID}}"
+        repository_url="$graphdb_url/rest/repositories/$repository_id"
+
+        echo "Waiting for GraphDB at $graphdb_url"
+        attempts=0
+        until curl --fail --silent --show-error "$graphdb_url/rest/repositories" >/dev/null; do
+          attempts=$((attempts + 1))
+          if [ "$attempts" -ge 120 ]; then
+            echo "GraphDB did not become ready within 120 seconds" >&2
+            exit 1
+          fi
+          sleep 1
+        done
+
+        repository_status="$(curl --silent --output /dev/null --write-out '%{http_code}' "$repository_url")"
+        case "$repository_status" in
+          200)
+            echo "Repository $repository_id already exists"
+            ;;
+          404)
+            echo "Creating repository $repository_id"
+            curl --fail --show-error \
+              --request POST \
+              --form "config=@maldives-config.ttl;type=text/turtle" \
+              "$graphdb_url/rest/repositories"
+            ;;
+          *)
+            echo "Unexpected repository status: HTTP $repository_status" >&2
+            exit 1
+            ;;
+        esac
+
+        repository_size="$(curl --fail --silent --show-error "$repository_url/size")"
+        if [ "$repository_size" = "0" ]; then
+          echo "Importing {{.DATA_DIR}}/{{.DATA_FILE}}"
+          curl --fail --show-error \
+            --request POST \
+            --header "Content-Type: text/turtle" \
+            --upload-file "{{.DATA_DIR}}/{{.DATA_FILE}}" \
+            "$graphdb_url/repositories/$repository_id/statements"
+        else
+          echo "Repository $repository_id already contains $repository_size statements"
+        fi
