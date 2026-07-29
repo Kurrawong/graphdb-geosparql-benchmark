@@ -6,6 +6,7 @@ vars:
   DATA_ARCHIVE: mdv.osm.ttl.bz2
   DATA_URL: https://osm2rdf.cs.uni-freiburg.de/ttl/mdv.osm.ttl.bz2
   REPOSITORY_ID: maldives
+  GRAPHDB_URL: http://localhost:7200
   V2_REPOSITORY: https://github.com/Kurrawong/graphdb-geosparql-plugin.git
 
 tasks:
@@ -31,7 +32,13 @@ tasks:
       - docker compose --profile v1 up --detach graphdb-geosparql-v1
       - task: initialise
         vars:
-          GRAPHDB_URL: http://localhost:7201
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: allow-spatial-index-errors
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: enable-spatial-index
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
 
   v1:down:
     desc: Stop the GeoSPARQL v1 GraphDB container
@@ -47,6 +54,23 @@ tasks:
   v2:build:
     desc: Build the GeoSPARQL v2 image from master (or GEOSPARQL_V2_REF)
     cmds:
+      - task: v2:build-image
+        vars:
+          BUILD_FLAGS: --pull
+
+  v2:build-no-cache:
+    desc: Rebuild the GeoSPARQL v2 image without using the Docker build cache
+    cmds:
+      - task: v2:build-image
+        vars:
+          BUILD_FLAGS: --pull --no-cache
+
+  v2:build-image:
+    internal: true
+    requires:
+      vars:
+        - BUILD_FLAGS
+    cmds:
       - |
         set -eu
         plugin_ref="${GEOSPARQL_V2_REF:-master}"
@@ -59,7 +83,7 @@ tasks:
           echo "Building GeoSPARQL v2 commit $plugin_ref"
         fi
         GEOSPARQL_V2_REF="$plugin_ref" \
-          docker compose build --pull \
+          docker compose build {{.BUILD_FLAGS}} \
           --build-arg GEOSPARQL_V2_REF="$plugin_ref" \
           graphdb-geosparql-v2
 
@@ -73,7 +97,10 @@ tasks:
       - docker compose --profile v2 up --detach graphdb-geosparql-v2
       - task: initialise
         vars:
-          GRAPHDB_URL: http://localhost:7202
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: enable-spatial-index
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
 
   v2:down:
     desc: Stop the GeoSPARQL v2 GraphDB container
@@ -85,6 +112,76 @@ tasks:
     cmds:
       - task: v2:down
       - rm -rf ./graphdb-home-geosparql-v2
+
+  benchmark-query:
+    desc: Run the benchmark spatial query against the active GraphDB variant
+    cmds:
+      - |
+        set -eu
+        response_file="$(mktemp)"
+        trap 'rm -f "$response_file"' EXIT
+
+        curl --fail-with-body --silent --show-error \
+          --write-out '%{stderr}HTTP %{http_code}\nTotal: %{time_total}s\n' \
+          --request POST \
+          "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}" \
+          --header "Content-Type: application/sparql-query" \
+          --header "Accept: application/sparql-results+json" \
+          --output "$response_file" \
+          --data-binary @- <<'SPARQL'
+        PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+
+        SELECT ?feature ?wkt ?type
+        WHERE {
+          ?feature geo:hasGeometry ?geometry .
+          ?geometry geo:asWKT ?wkt .
+          OPTIONAL { ?feature rdf:type ?type . }
+
+          ?geometry geo:sfWithin "POLYGON((71.71689397797601 7.419094102713061, 72.27946321523228 -1.1898124287125, 74.76601924390499 -1.2010613645552013, 74.1471930829231 7.597572649973657, 71.71689397797601 7.419094102713061))"^^geo:wktLiteral .
+        }
+        SPARQL
+        jq '.results.bindings | length' "$response_file"
+
+  allow-spatial-index-errors:
+    internal: true
+    requires:
+      vars:
+        - GRAPHDB_URL
+    cmds:
+      - |
+        echo "Configuring the v1 spatial index to ignore unsupported geometries"
+        curl --fail-with-body --silent --show-error \
+          --request POST \
+          "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
+          --header "Content-Type: application/sparql-update" \
+          --data-binary @- <<'SPARQL'
+        PREFIX geosparql: <http://www.ontotext.com/plugins/geosparql#>
+
+        INSERT DATA {
+          [] geosparql:ignoreErrors "true" .
+        }
+        SPARQL
+
+  enable-spatial-index:
+    desc: Enable the GeoSPARQL index on the active GraphDB variant
+    requires:
+      vars:
+        - GRAPHDB_URL
+    cmds:
+      - |
+        echo "Enabling the spatial index"
+        curl --fail-with-body --silent --show-error \
+          --request POST \
+          "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
+          --header "Content-Type: application/sparql-update" \
+          --data-binary @- <<'SPARQL'
+        PREFIX geosparql: <http://www.ontotext.com/plugins/geosparql#>
+
+        INSERT DATA {
+          [] geosparql:enabled "true" .
+        }
+        SPARQL
 
   initialise:
     internal: true
