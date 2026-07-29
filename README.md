@@ -18,6 +18,27 @@ Only one variant runs at a time. Both variants are available at
 The GraphDB containers are configured with a 10 GB maximum JVM heap. Ensure
 Docker has enough memory available.
 
+## Configure the GraphDB license
+
+GraphDB 11 requires a license. The first `up` attempt for each variant may stop
+when it reaches the GeoSPARQL configuration step and report that no license is
+set.
+
+With the selected variant still running, open <http://localhost:7200> and use
+**Setup → License → Set new license** to upload or paste your license. Then run
+the same `up` task again:
+
+```sh
+task v1:up
+# or
+task v2:up
+```
+
+The v1 and v2 services use separate GraphDB homes, so configure the license once
+for each variant. The clean tasks preserve those homes and their licenses. See
+the [GraphDB license documentation](https://graphdb.ontotext.com/documentation/11.2/set-up-your-license.html)
+for the Workbench and file-based installation options.
+
 ## Start a benchmark variant
 
 Start GraphDB with the bundled GeoSPARQL v1 plugin:
@@ -40,7 +61,8 @@ Each `up` task:
 3. Starts the selected variant.
 4. Creates the `maldives` repository when necessary.
 5. Imports the dataset when the repository is empty.
-6. Enables the GeoSPARQL spatial index.
+6. Enables the GeoSPARQL spatial index and reports its build time and on-disk
+   size.
 
 The v1 task also configures the plugin to ignore unsupported geometries before
 enabling its index because v1 does not support the `GEOMETRYCOLLECTION` values
@@ -78,9 +100,9 @@ With either variant running:
 task benchmark-query
 ```
 
-The task prints the number of result bindings to standard output. The HTTP
-status and total request time are printed to standard error so they do not
-interfere with the JSON result processing.
+The task prints the number of result bindings as `Rows returned: N`. The HTTP
+status and total request time are printed separately so they do not interfere
+with the JSON result processing.
 
 Run the query multiple times if both cold-cache and warm-cache performance are
 of interest, and do not compare a first run from one variant with a warmed-up
@@ -95,15 +117,17 @@ task v1:down
 task v2:down
 ```
 
-Stop the selected container and remove its GraphDB home:
+Delete the selected variant's `maldives` repository through the GraphDB REST API
+and then stop its container:
 
 ```sh
 task v1:down-clean
 task v2:down-clean
 ```
 
-The clean tasks permanently remove that variant's repository data and spatial
-index. The downloaded source dataset is preserved.
+The selected service must be running when its clean task begins. The clean tasks
+permanently remove that variant's repository data and spatial index, but
+preserve its GraphDB home, license, and the downloaded source dataset.
 
 ## Other tasks
 
@@ -116,5 +140,8 @@ task --list
 Enable the spatial index manually on whichever variant is running:
 
 ```sh
-task enable-spatial-index
+task enable-spatial-index \
+  SPATIAL_INDEX_DIR=graphdb-home-geosparql-v1/data/repositories/maldives/storage/GeoSPARQL
 ```
+
+Use `graphdb-home-geosparql-v2` in the path when the v2 variant is running.

@@ -7,6 +7,8 @@ vars:
   DATA_URL: https://osm2rdf.cs.uni-freiburg.de/ttl/mdv.osm.ttl.bz2
   REPOSITORY_ID: maldives
   GRAPHDB_URL: http://localhost:7200
+  V1_SPATIAL_INDEX_DIR: graphdb-home-geosparql-v1/data/repositories/maldives/storage/GeoSPARQL
+  V2_SPATIAL_INDEX_DIR: graphdb-home-geosparql-v2/data/repositories/maldives/storage/GeoSPARQL
   V2_REPOSITORY: https://github.com/Kurrawong/graphdb-geosparql-plugin.git
 
 tasks:
@@ -39,6 +41,7 @@ tasks:
       - task: enable-spatial-index
         vars:
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+          SPATIAL_INDEX_DIR: "{{.V1_SPATIAL_INDEX_DIR}}"
 
   v1:down:
     desc: Stop the GeoSPARQL v1 GraphDB container
@@ -46,10 +49,14 @@ tasks:
       - docker compose --profile v1 down graphdb-geosparql-v1
 
   v1:down-clean:
-    desc: Stop GeoSPARQL v1 and remove its GraphDB home
+    desc: Delete the v1 repository through the REST API and stop GraphDB
     cmds:
+      - task: delete-repository
+        vars:
+          COMPOSE_PROFILE: v1
+          COMPOSE_SERVICE: graphdb-geosparql-v1
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
       - task: v1:down
-      - rm -rf ./graphdb-home-geosparql-v1
 
   v2:build:
     desc: Build the GeoSPARQL v2 image from master (or GEOSPARQL_V2_REF)
@@ -73,6 +80,7 @@ tasks:
     cmds:
       - |
         set -eu
+        build_started="$(date +%s)"
         plugin_ref="${GEOSPARQL_V2_REF:-master}"
         if [ "$plugin_ref" = "master" ]; then
           plugin_ref="$(git ls-remote "{{.V2_REPOSITORY}}" refs/heads/master | awk '{print $1}')"
@@ -86,6 +94,9 @@ tasks:
           docker compose build {{.BUILD_FLAGS}} \
           --build-arg GEOSPARQL_V2_REF="$plugin_ref" \
           graphdb-geosparql-v2
+        build_finished="$(date +%s)"
+        build_duration="$((build_finished - build_started))"
+        echo "GeoSPARQL v2 image build completed successfully in ${build_duration}s"
 
   v2:up:
     desc: Build, start, and initialise GraphDB with the GeoSPARQL v2 plugin
@@ -101,6 +112,7 @@ tasks:
       - task: enable-spatial-index
         vars:
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+          SPATIAL_INDEX_DIR: "{{.V2_SPATIAL_INDEX_DIR}}"
 
   v2:down:
     desc: Stop the GeoSPARQL v2 GraphDB container
@@ -108,10 +120,14 @@ tasks:
       - docker compose --profile v2 down graphdb-geosparql-v2
 
   v2:down-clean:
-    desc: Stop GeoSPARQL v2 and remove its GraphDB home
+    desc: Delete the v2 repository through the REST API and stop GraphDB
     cmds:
+      - task: delete-repository
+        vars:
+          COMPOSE_PROFILE: v2
+          COMPOSE_SERVICE: graphdb-geosparql-v2
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
       - task: v2:down
-      - rm -rf ./graphdb-home-geosparql-v2
 
   benchmark-query:
     desc: Run the benchmark spatial query against the active GraphDB variant
@@ -121,6 +137,7 @@ tasks:
         response_file="$(mktemp)"
         trap 'rm -f "$response_file"' EXIT
 
+        set +e
         curl --fail-with-body --silent --show-error \
           --write-out '%{stderr}HTTP %{http_code}\nTotal: %{time_total}s\n' \
           --request POST \
@@ -141,7 +158,22 @@ tasks:
           ?geometry geo:sfWithin "POLYGON((71.71689397797601 7.419094102713061, 72.27946321523228 -1.1898124287125, 74.76601924390499 -1.2010613645552013, 74.1471930829231 7.597572649973657, 71.71689397797601 7.419094102713061))"^^geo:wktLiteral .
         }
         SPARQL
-        jq '.results.bindings | length' "$response_file"
+        curl_status="$?"
+        set -e
+
+        case "$curl_status" in
+          0)
+            ;;
+          18)
+            echo "Warning: GraphDB closed the HTTP response after sending the result body" >&2
+            ;;
+          *)
+            exit "$curl_status"
+            ;;
+        esac
+
+        row_count="$(jq --exit-status '.results.bindings | length' "$response_file")"
+        echo "Rows returned: $row_count"
 
   allow-spatial-index-errors:
     internal: true
@@ -150,38 +182,102 @@ tasks:
         - GRAPHDB_URL
     cmds:
       - |
-        echo "Configuring the v1 spatial index to ignore unsupported geometries"
-        curl --fail-with-body --silent --show-error \
-          --request POST \
-          "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
-          --header "Content-Type: application/sparql-update" \
-          --data-binary @- <<'SPARQL'
+        echo "Configuring GeoSPARQL v1 to ignore unsupported geometries"
+        configuration_time="$(
+          curl --fail-with-body --silent --show-error \
+            --output /dev/null \
+            --write-out '%{time_total}' \
+            --request POST \
+            "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
+            --header "Content-Type: application/sparql-update" \
+            --data-binary @- <<'SPARQL'
         PREFIX geosparql: <http://www.ontotext.com/plugins/geosparql#>
 
         INSERT DATA {
           [] geosparql:ignoreErrors "true" .
         }
         SPARQL
+        )"
+        echo "GeoSPARQL v1 error handling configured successfully in ${configuration_time}s"
 
   enable-spatial-index:
     desc: Enable the GeoSPARQL index on the active GraphDB variant
     requires:
       vars:
         - GRAPHDB_URL
+        - SPATIAL_INDEX_DIR
     cmds:
       - |
+        set -eu
         echo "Enabling the spatial index"
-        curl --fail-with-body --silent --show-error \
-          --request POST \
-          "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
-          --header "Content-Type: application/sparql-update" \
-          --data-binary @- <<'SPARQL'
+        indexing_time="$(
+          curl --fail-with-body --silent --show-error \
+            --output /dev/null \
+            --write-out '%{time_total}' \
+            --request POST \
+            "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
+            --header "Content-Type: application/sparql-update" \
+            --data-binary @- <<'SPARQL'
         PREFIX geosparql: <http://www.ontotext.com/plugins/geosparql#>
 
         INSERT DATA {
           [] geosparql:enabled "true" .
         }
         SPARQL
+        )"
+
+        index_dir="{{.SPATIAL_INDEX_DIR}}"
+        if [ ! -d "$index_dir" ]; then
+          echo "GeoSPARQL index directory was not created at $index_dir" >&2
+          exit 1
+        fi
+
+        index_size="$(du --summarize --human-readable "$index_dir" | cut -f1)"
+        index_bytes="$(du --summarize --block-size=1 "$index_dir" | cut -f1)"
+
+        echo "GeoSPARQL spatial indexing completed successfully in ${indexing_time}s"
+        echo "GeoSPARQL spatial index size: $index_size ($index_bytes bytes)"
+
+  delete-repository:
+    internal: true
+    requires:
+      vars:
+        - COMPOSE_PROFILE
+        - COMPOSE_SERVICE
+        - GRAPHDB_URL
+    cmds:
+      - |
+        set -eu
+        profile="{{.COMPOSE_PROFILE}}"
+        service="{{.COMPOSE_SERVICE}}"
+        repository_id="{{.REPOSITORY_ID}}"
+        repository_url="{{.GRAPHDB_URL}}/rest/repositories/$repository_id"
+
+        if ! docker compose --profile "$profile" ps --status running --services |
+          grep --quiet --line-regexp "$service"; then
+          echo "$service must be running before its repository can be deleted" >&2
+          exit 1
+        fi
+
+        repository_status="$(
+          curl --silent --output /dev/null --write-out '%{http_code}' "$repository_url"
+        )"
+        case "$repository_status" in
+          200)
+            echo "Deleting repository $repository_id through the GraphDB REST API"
+            curl --fail-with-body --silent --show-error \
+              --request DELETE \
+              "$repository_url"
+            echo "Repository $repository_id deleted successfully"
+            ;;
+          404)
+            echo "Repository $repository_id does not exist"
+            ;;
+          *)
+            echo "Unexpected repository status: HTTP $repository_status" >&2
+            exit 1
+            ;;
+        esac
 
   initialise:
     internal: true
@@ -224,7 +320,10 @@ tasks:
             ;;
         esac
 
-        repository_size="$(curl --fail --silent --show-error "$repository_url/size")"
+        repository_size="$(
+          curl --fail --silent --show-error "$repository_url/size" |
+            jq --exit-status --raw-output '.total'
+        )"
         if [ "$repository_size" = "0" ]; then
           echo "Importing {{.DATA_DIR}}/{{.DATA_FILE}}"
           curl --fail --show-error \
