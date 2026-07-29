@@ -56,6 +56,9 @@ tasks:
           COMPOSE_PROFILE: v1
           COMPOSE_SERVICE: graphdb-geosparql-v1
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-spatial-index-files
+        vars:
+          SPATIAL_INDEX_DIR: "{{.V1_SPATIAL_INDEX_DIR}}"
       - task: v1:down
 
   v2:build:
@@ -127,6 +130,9 @@ tasks:
           COMPOSE_PROFILE: v2
           COMPOSE_SERVICE: graphdb-geosparql-v2
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-spatial-index-files
+        vars:
+          SPATIAL_INDEX_DIR: "{{.V2_SPATIAL_INDEX_DIR}}"
       - task: v2:down
 
   benchmark-query:
@@ -278,6 +284,32 @@ tasks:
             exit 1
             ;;
         esac
+
+  remove-spatial-index-files:
+    internal: true
+    requires:
+      vars:
+        - SPATIAL_INDEX_DIR
+    cmds:
+      - |
+        set -eu
+        index_dir="{{.SPATIAL_INDEX_DIR}}"
+
+        case "$index_dir" in
+          "{{.V1_SPATIAL_INDEX_DIR}}"|"{{.V2_SPATIAL_INDEX_DIR}}")
+            ;;
+          *)
+            echo "Refusing to remove unexpected spatial index path: $index_dir" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ -e "$index_dir" ]; then
+          rm -rf -- "$index_dir"
+          echo "Removed GeoSPARQL configuration and index files from $index_dir"
+        else
+          echo "GeoSPARQL index directory does not exist: $index_dir"
+        fi
 
   initialise:
     internal: true

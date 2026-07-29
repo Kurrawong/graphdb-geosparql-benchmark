@@ -126,8 +126,10 @@ task v2:down-clean
 ```
 
 The selected service must be running when its clean task begins. The clean tasks
-permanently remove that variant's repository data and spatial index, but
-preserve its GraphDB home, license, and the downloaded source dataset.
+permanently remove that variant's repository data through the REST API and
+explicitly delete its `storage/GeoSPARQL` configuration and spatial index
+directory. They preserve the surrounding GraphDB home, license, and downloaded
+source dataset.
 
 ## Other tasks
 
