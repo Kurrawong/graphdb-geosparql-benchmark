@@ -35,6 +35,9 @@ tasks:
       - task: initialise
         vars:
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-geometry-collection-wkts
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
       - task: allow-spatial-index-errors
         vars:
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
@@ -112,6 +115,9 @@ tasks:
       - task: initialise
         vars:
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-geometry-collection-wkts
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
       - task: enable-spatial-index
         vars:
           GRAPHDB_URL: "{{.GRAPHDB_URL}}"
@@ -135,17 +141,365 @@ tasks:
           SPATIAL_INDEX_DIR: "{{.V2_SPATIAL_INDEX_DIR}}"
       - task: v2:down
 
+  benchmark:all:
+    desc: Run fresh v1 and v2 suites in order and generate the final report
+    cmds:
+      - task: benchmark:v1
+      - task: benchmark:v2
+      - task: benchmark:report
+
+  benchmark:v1:
+    desc: Rebuild and run the complete benchmark suite for GeoSPARQL v1
+    cmds:
+      - |
+        set -eu
+        task benchmark:clear VARIANT=v1
+        trap 'task v1:down' EXIT
+        docker compose --profile v2 down graphdb-geosparql-v2
+        task benchmark:reset-variant \
+          COMPOSE_PROFILE=v1 \
+          COMPOSE_SERVICE=graphdb-geosparql-v1 \
+          SPATIAL_INDEX_DIR="{{.V1_SPATIAL_INDEX_DIR}}"
+        task v1:up
+        task benchmark-query
+
+  benchmark:v2:
+    desc: Rebuild and run the complete benchmark suite for GeoSPARQL v2
+    cmds:
+      - |
+        set -eu
+        task benchmark:clear VARIANT=v2
+        trap 'task v2:down' EXIT
+        docker compose --profile v1 down graphdb-geosparql-v1
+
+        plugin_ref="${GEOSPARQL_V2_REF:-master}"
+        if [ "$plugin_ref" = "master" ]; then
+          plugin_ref="$(git ls-remote "{{.V2_REPOSITORY}}" refs/heads/master | awk '{print $1}')"
+          if [ -z "$plugin_ref" ]; then
+            echo "Could not resolve the v2 master commit" >&2
+            exit 1
+          fi
+        fi
+        echo "Benchmarking GeoSPARQL v2 commit $plugin_ref"
+
+        GEOSPARQL_V2_REF="$plugin_ref" task v2:build
+        task benchmark:reset-variant \
+          COMPOSE_PROFILE=v2 \
+          COMPOSE_SERVICE=graphdb-geosparql-v2 \
+          SPATIAL_INDEX_DIR="{{.V2_SPATIAL_INDEX_DIR}}"
+        GEOSPARQL_V2_REF="$plugin_ref" task v2:up
+        task benchmark-query
+
+  benchmark:report:
+    desc: Compare the saved v1 and v2 benchmark results
+    cmds:
+      - |
+        set -eu
+        v1_metrics="benchmark-results/v1/metrics.json"
+        v2_metrics="benchmark-results/v2/metrics.json"
+        v1_index_metrics="benchmark-results/v1/index-metrics.json"
+        v2_index_metrics="benchmark-results/v2/index-metrics.json"
+        report_file="benchmark-results/report.md"
+        report_part="$report_file.part"
+
+        for metrics_file in \
+          "$v1_metrics" "$v2_metrics" \
+          "$v1_index_metrics" "$v2_index_metrics"; do
+          if [ ! -f "$metrics_file" ]; then
+            echo "Missing $metrics_file; run both benchmark:v1 and benchmark:v2 first" >&2
+            exit 1
+          fi
+        done
+
+        for metrics_file in "$v1_metrics" "$v2_metrics"; do
+          jq --exit-status '
+            .schema_version == 1 and
+            .query_id == "within-polygon" and
+            .http_status == 200 and
+            (.response_time_seconds | type == "number" and . > 0) and
+            (.row_count | type == "number") and
+            (.canonical_sha256 | type == "string")
+          ' "$metrics_file" >/dev/null
+        done
+        for metrics_file in "$v1_index_metrics" "$v2_index_metrics"; do
+          jq --exit-status '
+            .schema_version == 1 and
+            (.indexing_time_seconds | type == "number" and . >= 0) and
+            (.index_size_bytes | type == "number" and . > 0)
+          ' "$metrics_file" >/dev/null
+        done
+
+        v1_time="$(jq --raw-output '.response_time_seconds' "$v1_metrics")"
+        v2_time="$(jq --raw-output '.response_time_seconds' "$v2_metrics")"
+        v1_rows="$(jq --raw-output '.row_count' "$v1_metrics")"
+        v2_rows="$(jq --raw-output '.row_count' "$v2_metrics")"
+        v1_hash="$(jq --raw-output '.canonical_sha256' "$v1_metrics")"
+        v2_hash="$(jq --raw-output '.canonical_sha256' "$v2_metrics")"
+        v1_revision="$(jq --raw-output '.plugin_revision' "$v1_metrics")"
+        v2_revision="$(jq --raw-output '.plugin_revision' "$v2_metrics")"
+        v1_index_time="$(jq --raw-output '.indexing_time_seconds' "$v1_index_metrics")"
+        v2_index_time="$(jq --raw-output '.indexing_time_seconds' "$v2_index_metrics")"
+        v1_index_bytes="$(jq --raw-output '.index_size_bytes' "$v1_index_metrics")"
+        v2_index_bytes="$(jq --raw-output '.index_size_bytes' "$v2_index_metrics")"
+
+        if [ "$v1_hash" = "$v2_hash" ]; then
+          output_result="MATCH"
+        else
+          output_result="DIFFER"
+        fi
+
+        comparison="$(
+          jq --null-input --raw-output \
+            --argjson v1 "$v1_time" \
+            --argjson v2 "$v2_time" \
+            'if $v1 == $v2 then
+               "Execution times are equal"
+             elif $v1 > $v2 then
+               "v2 is \($v1 / $v2 | tostring)x faster than v1"
+             else
+               "v1 is \($v2 / $v1 | tostring)x faster than v2"
+             end'
+        )"
+
+        mkdir -p benchmark-results
+        trap 'rm -f "$report_part"' EXIT
+        {
+          echo "# GeoSPARQL benchmark report"
+          echo
+          echo "| Measure | v1 | v2 |"
+          echo "| --- | ---: | ---: |"
+          echo "| HTTP status | 200 | 200 |"
+          echo "| Response time (seconds) | $v1_time | $v2_time |"
+          echo "| Rows returned | $v1_rows | $v2_rows |"
+          echo "| Spatial indexing time (seconds) | $v1_index_time | $v2_index_time |"
+          echo "| Spatial index size (bytes) | $v1_index_bytes | $v2_index_bytes |"
+          echo "| Canonical SHA-256 | \`$v1_hash\` | \`$v2_hash\` |"
+          echo "| Plugin revision | \`$v1_revision\` | \`$v2_revision\` |"
+          echo
+          echo "**Output comparison:** $output_result"
+          echo
+          echo "**Performance comparison:** $comparison"
+        } > "$report_part"
+        mv "$report_part" "$report_file"
+
+        cat "$report_file"
+        echo
+        echo "Saved benchmark report to $report_file"
+
   benchmark-query:
     desc: Run the benchmark spatial query against the active GraphDB variant
+    cmds:
+      - |
+        set -eu
+
+        v1_running="$(
+          docker compose --profile v1 ps --status running --services |
+            grep --count --line-regexp 'graphdb-geosparql-v1' || true
+        )"
+        v2_running="$(
+          docker compose --profile v2 ps --status running --services |
+            grep --count --line-regexp 'graphdb-geosparql-v2' || true
+        )"
+
+        case "$v1_running:$v2_running" in
+          1:0)
+            variant="v1"
+            other_variant="v2"
+            ;;
+          0:1)
+            variant="v2"
+            other_variant="v1"
+            ;;
+          0:0)
+            echo "Neither GraphDB benchmark variant is running" >&2
+            exit 1
+            ;;
+          *)
+            echo "Expected exactly one GraphDB benchmark variant to be running" >&2
+            exit 1
+            ;;
+        esac
+
+        results_dir="benchmark-results/$variant"
+        other_results_dir="benchmark-results/$other_variant"
+        response_file="$results_dir/results.json"
+        response_part="$response_file.part"
+        canonical_file="$results_dir/results.canonical.jsonl"
+        canonical_part="$canonical_file.part"
+        canonical_unsorted="$canonical_file.unsorted.part"
+        hash_file="$results_dir/results.sha256"
+        hash_part="$hash_file.part"
+        metrics_file="$results_dir/metrics.json"
+        metrics_part="$metrics_file.part"
+        transfer_metrics="$results_dir/curl-metrics.part"
+
+        mkdir -p "$results_dir"
+        trap 'rm -f "$response_part" "$canonical_part" "$canonical_unsorted" "$hash_part" "$metrics_part" "$transfer_metrics"' EXIT
+
+        echo "Running benchmark query against GeoSPARQL $variant"
+        curl --fail-with-body --silent --show-error \
+          --write-out '%{http_code}\t%{time_total}\n' \
+          --request POST \
+          "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}" \
+          --header "Content-Type: application/sparql-query" \
+          --header "Accept: application/sparql-results+json" \
+          --output "$response_part" \
+          --data-binary @- > "$transfer_metrics" <<'SPARQL'
+        PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+        SELECT ?feature ?geometry ?wkt
+        WHERE {
+          ?feature geo:hasGeometry ?geometry .
+          ?geometry geo:asWKT ?wkt .
+
+          ?geometry geo:sfWithin "POLYGON((71.71689397797601 7.419094102713061, 72.27946321523228 -1.1898124287125, 74.76601924390499 -1.2010613645552013, 74.1471930829231 7.597572649973657, 71.71689397797601 7.419094102713061))"^^geo:wktLiteral .
+        }
+        SPARQL
+
+        transfer_line="$(cat "$transfer_metrics")"
+        http_status="${transfer_line%%	*}"
+        response_time="${transfer_line#*	}"
+        echo "HTTP $http_status"
+        echo "Response time: ${response_time}s"
+
+        jq --compact-output '
+          .results.bindings[] |
+          [
+            .feature.value,
+            .geometry.value,
+            .wkt.type,
+            (.wkt.datatype // null),
+            (.wkt["xml:lang"] // null),
+            .wkt.value
+          ]
+        ' "$response_part" > "$canonical_unsorted"
+        LC_ALL=C sort "$canonical_unsorted" > "$canonical_part"
+
+        row_count="$(wc --lines < "$canonical_part")"
+        result_hash="$(sha256sum "$canonical_part" | awk '{print $1}')"
+        printf '%s\n' "$result_hash" > "$hash_part"
+
+        if [ "$variant" = "v2" ]; then
+          plugin_revision="$(
+            docker compose --profile v2 exec --no-TTY graphdb-geosparql-v2 \
+              cat /opt/graphdb/geosparql-v2-source-commit.txt
+          )"
+        else
+          plugin_revision="bundled-with-graphdb-11.4.0"
+        fi
+
+        jq --null-input \
+          --arg variant "$variant" \
+          --arg plugin_revision "$plugin_revision" \
+          --argjson http_status "$http_status" \
+          --argjson response_time_seconds "$response_time" \
+          --argjson row_count "$row_count" \
+          --arg canonical_sha256 "$result_hash" \
+          '{
+            schema_version: 1,
+            query_id: "within-polygon",
+            variant: $variant,
+            graphdb_version: "11.4.0",
+            plugin_revision: $plugin_revision,
+            http_status: $http_status,
+            response_time_seconds: $response_time_seconds,
+            row_count: $row_count,
+            canonical_sha256: $canonical_sha256
+          }' > "$metrics_part"
+
+        mv "$response_part" "$response_file"
+        mv "$canonical_part" "$canonical_file"
+        mv "$hash_part" "$hash_file"
+        mv "$metrics_part" "$metrics_file"
+
+        echo "Rows returned: $row_count"
+        echo "Canonical SHA-256: $result_hash"
+        echo "Saved JSON results to $response_file"
+        echo "Saved canonical results to $canonical_file"
+        echo "Saved benchmark metrics to $metrics_file"
+
+        other_hash_file="$other_results_dir/results.sha256"
+        if [ -f "$other_hash_file" ]; then
+          other_hash="$(cat "$other_hash_file")"
+          if [ "$result_hash" = "$other_hash" ]; then
+            echo "Output matches the saved GeoSPARQL $other_variant result"
+          else
+            echo "WARNING: Output differs from the saved GeoSPARQL $other_variant result" >&2
+            echo "GeoSPARQL $variant: $result_hash" >&2
+            echo "GeoSPARQL $other_variant: $other_hash" >&2
+          fi
+        else
+          echo "No saved GeoSPARQL $other_variant result is available for comparison"
+        fi
+
+  benchmark:clear:
+    requires:
+      vars:
+        - VARIANT
+    cmds:
+      - |
+        set -eu
+        variant="{{.VARIANT}}"
+        case "$variant" in
+          v1|v2)
+            ;;
+          *)
+            echo "Refusing to clear results for unexpected variant: $variant" >&2
+            exit 1
+            ;;
+        esac
+
+        results_dir="benchmark-results/$variant"
+        rm -f \
+          "$results_dir/results.json" \
+          "$results_dir/results.json.part" \
+          "$results_dir/results.canonical.jsonl" \
+          "$results_dir/results.canonical.jsonl.part" \
+          "$results_dir/results.canonical.jsonl.unsorted.part" \
+          "$results_dir/results.sha256" \
+          "$results_dir/results.sha256.part" \
+          "$results_dir/metrics.json" \
+          "$results_dir/metrics.json.part" \
+          "$results_dir/index-metrics.json" \
+          "$results_dir/index-metrics.json.part" \
+          "$results_dir/curl-metrics.part"
+        echo "Cleared prior GeoSPARQL $variant benchmark results"
+
+  benchmark:reset-variant:
+    requires:
+      vars:
+        - COMPOSE_PROFILE
+        - COMPOSE_SERVICE
+        - SPATIAL_INDEX_DIR
+    cmds:
+      - echo "Resetting {{.COMPOSE_SERVICE}} to a clean repository state"
+      - >-
+        docker compose --profile "{{.COMPOSE_PROFILE}}" up --detach
+        "{{.COMPOSE_SERVICE}}"
+      - task: delete-repository
+        vars:
+          COMPOSE_PROFILE: "{{.COMPOSE_PROFILE}}"
+          COMPOSE_SERVICE: "{{.COMPOSE_SERVICE}}"
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-spatial-index-files
+        vars:
+          SPATIAL_INDEX_DIR: "{{.SPATIAL_INDEX_DIR}}"
+      - >-
+        docker compose --profile "{{.COMPOSE_PROFILE}}" down
+        "{{.COMPOSE_SERVICE}}"
+
+  remove-geometry-collection-wkts:
+    internal: true
+    requires:
+      vars:
+        - GRAPHDB_URL
     cmds:
       - |
         set -eu
         response_file="$(mktemp)"
         trap 'rm -f "$response_file"' EXIT
 
-        set +e
         curl --fail-with-body --silent --show-error \
-          --write-out '%{stderr}HTTP %{http_code}\nTotal: %{time_total}s\n' \
           --request POST \
           "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}" \
           --header "Content-Type: application/sparql-query" \
@@ -153,33 +507,46 @@ tasks:
           --output "$response_file" \
           --data-binary @- <<'SPARQL'
         PREFIX geo: <http://www.opengis.net/ont/geosparql#>
-        PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 
-        SELECT ?feature ?wkt ?type
+        SELECT (COUNT(?wkt) AS ?count)
         WHERE {
-          ?feature geo:hasGeometry ?geometry .
           ?geometry geo:asWKT ?wkt .
-          OPTIONAL { ?feature rdf:type ?type . }
-
-          ?geometry geo:sfWithin "POLYGON((71.71689397797601 7.419094102713061, 72.27946321523228 -1.1898124287125, 74.76601924390499 -1.2010613645552013, 74.1471930829231 7.597572649973657, 71.71689397797601 7.419094102713061))"^^geo:wktLiteral .
+          FILTER(CONTAINS(UCASE(STR(?wkt)), "GEOMETRYCOLLECTION"))
         }
         SPARQL
-        curl_status="$?"
-        set -e
 
-        case "$curl_status" in
-          0)
-            ;;
-          18)
-            echo "Warning: GraphDB closed the HTTP response after sending the result body" >&2
-            ;;
-          *)
-            exit "$curl_status"
-            ;;
-        esac
+        geometry_collection_count="$(
+          jq --exit-status --raw-output \
+            '.results.bindings[0].count.value | tonumber' \
+            "$response_file"
+        )"
 
-        row_count="$(jq --exit-status '.results.bindings | length' "$response_file")"
-        echo "Rows returned: $row_count"
+        if [ "$geometry_collection_count" -eq 0 ]; then
+          echo "No GeoSPARQL GEOMETRYCOLLECTION WKT literals found"
+          exit 0
+        fi
+
+        echo "Removing $geometry_collection_count GeoSPARQL GEOMETRYCOLLECTION WKT literals"
+        deletion_time="$(
+          curl --fail-with-body --silent --show-error \
+            --output /dev/null \
+            --write-out '%{time_total}' \
+            --request POST \
+            "{{.GRAPHDB_URL}}/repositories/{{.REPOSITORY_ID}}/statements" \
+            --header "Content-Type: application/sparql-update" \
+            --data-binary @- <<'SPARQL'
+        PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+        DELETE {
+          ?geometry geo:asWKT ?wkt .
+        }
+        WHERE {
+          ?geometry geo:asWKT ?wkt .
+          FILTER(CONTAINS(UCASE(STR(?wkt)), "GEOMETRYCOLLECTION"))
+        }
+        SPARQL
+        )"
+        echo "Removed $geometry_collection_count GeoSPARQL GEOMETRYCOLLECTION WKT literals in ${deletion_time}s"
 
   allow-spatial-index-errors:
     internal: true
@@ -244,6 +611,36 @@ tasks:
         echo "GeoSPARQL spatial indexing completed successfully in ${indexing_time}s"
         echo "GeoSPARQL spatial index size: $index_size ($index_bytes bytes)"
 
+        case "$index_dir" in
+          "{{.V1_SPATIAL_INDEX_DIR}}")
+            variant="v1"
+            ;;
+          "{{.V2_SPATIAL_INDEX_DIR}}")
+            variant="v2"
+            ;;
+          *)
+            echo "Cannot determine benchmark variant from index path: $index_dir" >&2
+            exit 1
+            ;;
+        esac
+
+        index_metrics="benchmark-results/$variant/index-metrics.json"
+        index_metrics_part="$index_metrics.part"
+        mkdir -p "benchmark-results/$variant"
+        trap 'rm -f "$index_metrics_part"' EXIT
+        jq --null-input \
+          --arg variant "$variant" \
+          --argjson indexing_time_seconds "$indexing_time" \
+          --argjson index_size_bytes "$index_bytes" \
+          '{
+            schema_version: 1,
+            variant: $variant,
+            indexing_time_seconds: $indexing_time_seconds,
+            index_size_bytes: $index_size_bytes
+          }' > "$index_metrics_part"
+        mv "$index_metrics_part" "$index_metrics"
+        echo "Saved spatial index metrics to $index_metrics"
+
   delete-repository:
     internal: true
     requires:
@@ -264,6 +661,17 @@ tasks:
           echo "$service must be running before its repository can be deleted" >&2
           exit 1
         fi
+
+        echo "Waiting for GraphDB at {{.GRAPHDB_URL}}"
+        attempts=0
+        until curl --fail --silent --show-error "{{.GRAPHDB_URL}}/rest/repositories" >/dev/null; do
+          attempts=$((attempts + 1))
+          if [ "$attempts" -ge 120 ]; then
+            echo "GraphDB did not become ready within 120 seconds" >&2
+            exit 1
+          fi
+          sleep 1
+        done
 
         repository_status="$(
           curl --silent --output /dev/null --write-out '%{http_code}' "$repository_url"

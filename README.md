@@ -5,6 +5,8 @@ Kurrawong GeoSPARQL plugin (v2) on GraphDB 11.4.0.
 
 Only one variant runs at a time. Both variants are available at
 <http://localhost:7200> and use separate persistent GraphDB home directories.
+See [benchmark.md](benchmark.md) for the benchmark methodology, query matrix,
+measurement protocol, and output-validation rules.
 
 ## Prerequisites
 
@@ -61,12 +63,15 @@ Each `up` task:
 3. Starts the selected variant.
 4. Creates the `maldives` repository when necessary.
 5. Imports the dataset when the repository is empty.
-6. Enables the GeoSPARQL spatial index and reports its build time and on-disk
+6. Removes `geo:asWKT` literals containing `GEOMETRYCOLLECTION`, reporting the
+   number removed and the update time.
+7. Enables the GeoSPARQL spatial index and reports its build time and on-disk
    size.
 
-The v1 task also configures the plugin to ignore unsupported geometries before
-enabling its index because v1 does not support the `GEOMETRYCOLLECTION` values
-in the dataset.
+The same unsupported WKT values are removed from both repositories so the
+variants are benchmarked against equivalent data. The v1 task also configures
+the plugin to ignore any other unsupported geometries before enabling its
+index.
 
 The v2 image is built from the current `master` revision of
 <https://github.com/Kurrawong/graphdb-geosparql-plugin>. To benchmark a specific
@@ -92,7 +97,54 @@ The regular cached image build is also available separately:
 task v2:build
 ```
 
-## Run the benchmark query
+## Run a complete comparison
+
+Configure the license for both variants before beginning. Then run these
+commands in order:
+
+```sh
+task benchmark:v1
+task benchmark:v2
+task benchmark:report
+```
+
+Alternatively, run the same ordered workflow with one command:
+
+```sh
+task benchmark:all
+```
+
+Do not run other GraphDB workloads while a benchmark suite is in progress.
+Each variant suite performs the same lifecycle:
+
+1. Deletes that variant's previous saved benchmark result.
+2. Stops the other variant.
+3. Starts the selected variant temporarily and deletes its existing
+   `maldives` repository and GeoSPARQL index.
+4. Recreates the repository, imports the dataset, removes the same unsupported
+   `GEOMETRYCOLLECTION` WKT literals, and builds a new spatial index.
+5. Runs the benchmark query once and saves the response and measurements.
+6. Stops the selected variant, including when the query fails.
+
+The v2 suite resolves `master` to one commit before building and uses that same
+commit throughout the run. Set `GEOSPARQL_V2_REF` to benchmark a chosen commit:
+
+```sh
+GEOSPARQL_V2_REF=<commit-sha> task benchmark:v2
+```
+
+`task benchmark:report` validates both metric files before comparing them. It
+prints the report to standard output and saves it as
+`benchmark-results/report.md`. The report contains each variant's response
+time, row count, spatial indexing time and size, canonical output hash, plugin
+revision, whether the outputs match, and the relative query execution speed.
+
+These suites deliberately rebuild the repository and index for each variant,
+so they take substantially longer than rerunning only the query. They measure
+one cold query after initialization. For reliable comparisons, use the same
+machine and Docker resource allocation and avoid concurrent workloads.
+
+## Run only the benchmark query
 
 With either variant running:
 
@@ -100,9 +152,41 @@ With either variant running:
 task benchmark-query
 ```
 
-The task prints the number of result bindings as `Rows returned: N`. The HTTP
-status and total request time are printed separately so they do not interfere
-with the JSON result processing.
+The query returns only the spatial result tuple: feature, geometry, and WKT.
+The task detects the active variant and records its output under
+`benchmark-results/v1/` or `benchmark-results/v2/`.
+
+The HTTP status and response time cover query execution and transfer of the
+complete JSON response. Canonicalization happens afterward and is not included
+in the reported query time. The task prints the following to standard output
+and persists the measurements in the variant's `metrics.json`:
+
+- The HTTP status and response time in seconds.
+- The number of result bindings.
+- A SHA-256 of the sorted feature/geometry/WKT result multiset.
+- The GraphDB version and plugin revision.
+- The paths to the original JSON and canonical JSON Lines results.
+- Whether the hash matches the other variant's latest saved result, when one is
+  available.
+
+A curl failure or invalid JSON fails the task without replacing the previous
+successful result. The complete per-variant output layout is:
+
+```text
+benchmark-results/
+├── v1/
+│   ├── metrics.json
+│   ├── index-metrics.json
+│   ├── results.json
+│   ├── results.canonical.jsonl
+│   └── results.sha256
+└── v2/
+    ├── metrics.json
+    ├── index-metrics.json
+    ├── results.json
+    ├── results.canonical.jsonl
+    └── results.sha256
+```
 
 Run the query multiple times if both cold-cache and warm-cache performance are
 of interest, and do not compare a first run from one variant with a warmed-up
