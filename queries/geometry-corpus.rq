@@ -1,0 +1,6 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+}

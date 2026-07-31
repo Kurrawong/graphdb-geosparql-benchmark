@@ -1,0 +1,7 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+  ?result geo:sfDisjoint "POLYGON((49 -2, 81 -2, 81 27, 49 27, 49 -2))"^^geo:wktLiteral .
+}

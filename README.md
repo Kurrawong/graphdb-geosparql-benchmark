@@ -123,8 +123,13 @@ Each variant suite performs the same lifecycle:
    `maldives` repository and GeoSPARQL index.
 4. Recreates the repository, imports the dataset, removes the same unsupported
    `GEOMETRYCOLLECTION` WKT literals, and builds a new spatial index.
-5. Runs the benchmark query once and saves the response and measurements.
-6. Stops the selected variant, including when the query fails.
+5. Runs the 13 queries listed in
+   [`queries/manifest.json`](queries/manifest.json), with one warm-up and three
+   measured executions of each query by default.
+6. Captures the complete canonical geometry corpus for correctness checks.
+7. Saves every response, canonical result multiset, hash, and measurement.
+8. Verifies that each query produces stable output across measured executions.
+9. Stops the selected variant, including when the query suite fails.
 
 The v2 suite resolves `master` to one commit before building and uses that same
 commit throughout the run. Set `GEOSPARQL_V2_REF` to benchmark a chosen commit:
@@ -133,18 +138,29 @@ commit throughout the run. Set `GEOSPARQL_V2_REF` to benchmark a chosen commit:
 GEOSPARQL_V2_REF=<commit-sha> task benchmark:v2
 ```
 
-`task benchmark:report` validates both metric files before comparing them. It
-prints the report to standard output and saves it as
-`benchmark-results/report.md`. The report contains each variant's response
-time, row count, spatial indexing time and size, canonical output hash, plugin
-revision, whether the outputs match, and the relative query execution speed.
+The repetition counts are configurable, but must be identical for v1 and v2:
+
+```sh
+BENCHMARK_WARMUPS=1 BENCHMARK_RUNS=5 task benchmark:all
+```
+
+`task benchmark:report` refuses incomplete, stale, or differently configured
+suites. It prints the report to standard output and saves it as
+`benchmark-results/report.md`. For each query, the report contains minimum,
+median, and maximum response times, row counts, output equality, and the
+relative v1/v2 median. It also reports spatial indexing time and size, plugin
+revisions, corpus equality, and the `sfIntersects`/`sfDisjoint` partition check.
+When outputs differ, the report is still written with the behavioural
+difference, but the affected performance ratio is marked unavailable and the
+report task exits unsuccessfully.
 
 These suites deliberately rebuild the repository and index for each variant,
-so they take substantially longer than rerunning only the query. They measure
-one cold query after initialization. For reliable comparisons, use the same
-machine and Docker resource allocation and avoid concurrent workloads.
+so they take substantially longer than rerunning only a query. Every query is
+warmed independently before its measured executions. For reliable comparisons,
+use the same machine and Docker resource allocation and avoid concurrent
+workloads.
 
-## Run only the benchmark query
+## Run queries against an existing variant
 
 With either variant running:
 
@@ -152,45 +168,58 @@ With either variant running:
 task benchmark-query
 ```
 
-The query returns only the spatial result tuple: feature, geometry, and WKT.
-The task detects the active variant and records its output under
-`benchmark-results/v1/` or `benchmark-results/v2/`.
+This runs the complete query manifest without rebuilding the repository or
+index. Run one selected query with:
+
+```sh
+BENCHMARK_QUERY_ID=sf-disjoint-region \
+BENCHMARK_WARMUPS=0 \
+BENCHMARK_RUNS=1 \
+task benchmark-query
+```
+
+A selected-query run invalidates the variant's complete-suite metadata, so a
+final report cannot accidentally combine it with older suite results.
 
 The HTTP status and response time cover query execution and transfer of the
 complete JSON response. Canonicalization happens afterward and is not included
-in the reported query time. The task prints the following to standard output
-and persists the measurements in the variant's `metrics.json`:
+in the reported query time. Each measured execution prints:
 
 - The HTTP status and response time in seconds.
 - The number of result bindings.
-- A SHA-256 of the sorted feature/geometry/WKT result multiset.
-- The GraphDB version and plugin revision.
-- The paths to the original JSON and canonical JSON Lines results.
-- Whether the hash matches the other variant's latest saved result, when one is
-  available.
+- A SHA-256 of the sorted geometry/WKT result multiset.
 
-A curl failure or invalid JSON fails the task without replacing the previous
-successful result. The complete per-variant output layout is:
+A curl failure, invalid JSON, missing projected binding, or unstable output
+fails the query without replacing its previous successful result. The
+per-variant output layout is:
 
 ```text
 benchmark-results/
 ├── v1/
-│   ├── metrics.json
 │   ├── index-metrics.json
-│   ├── results.json
-│   ├── results.canonical.jsonl
-│   └── results.sha256
+│   ├── suite.json
+│   ├── corpus/
+│   │   ├── results.json
+│   │   ├── results.canonical.jsonl
+│   │   └── summary.json
+│   └── queries/
+│       └── <query-id>/
+│           ├── summary.json
+│           └── run-<n>/
+│               ├── metrics.json
+│               ├── results.json
+│               ├── results.canonical.jsonl
+│               └── results.sha256
 └── v2/
-    ├── metrics.json
-    ├── index-metrics.json
-    ├── results.json
-    ├── results.canonical.jsonl
-    └── results.sha256
+    └── ...
 ```
 
-Run the query multiple times if both cold-cache and warm-cache performance are
-of interest, and do not compare a first run from one variant with a warmed-up
-run from the other.
+Run the static validation and deterministic fake-GraphDB tests without starting
+GraphDB:
+
+```sh
+task benchmark:validate
+```
 
 ## Stop a variant
 

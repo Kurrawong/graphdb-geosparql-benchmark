@@ -1,0 +1,58 @@
+#!/bin/sh
+
+set -eu
+
+output_file=""
+query_file=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output)
+      output_file="$2"
+      shift 2
+      ;;
+    --data-binary)
+      query_file="${2#@}"
+      shift 2
+      ;;
+    --write-out|--request|--header)
+      shift 2
+      ;;
+    --fail-with-body|--silent|--show-error)
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [ -z "$output_file" ] || [ -z "$query_file" ]; then
+  echo "Fake curl requires --output and --data-binary @QUERY" >&2
+  exit 1
+fi
+
+binding_a='{"result":{"type":"uri","value":"urn:geometry:a"},"wkt":{"type":"literal","datatype":"http://www.opengis.net/ont/geosparql#wktLiteral","value":"POINT(1 1)"}}'
+binding_b='{"result":{"type":"uri","value":"urn:geometry:b"},"wkt":{"type":"literal","datatype":"http://www.opengis.net/ont/geosparql#wktLiteral","value":"POINT(2 2)"}}'
+
+case "$(basename "$query_file")" in
+  geometry-corpus.rq)
+    bindings="[$binding_a,$binding_b]"
+    ;;
+  sf-intersects-region.rq)
+    bindings="[$binding_a]"
+    ;;
+  sf-disjoint-region.rq)
+    bindings="[$binding_b]"
+    ;;
+  sf-disjoint-cover.rq)
+    bindings="[]"
+    ;;
+  *)
+    bindings="[$binding_a]"
+    ;;
+esac
+
+printf '{"head":{"vars":["result","wkt"]},"results":{"bindings":%s}}\n' \
+  "$bindings" > "$output_file"
+printf '200\t%s\n' "${FAKE_CURL_TIME:-1.0}"

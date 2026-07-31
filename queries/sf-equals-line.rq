@@ -1,0 +1,8 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+  ?result geo:sfEquals
+    "LINESTRING(73.5195271 1.8601495,73.5188448 1.8587406)"^^geo:wktLiteral .
+}

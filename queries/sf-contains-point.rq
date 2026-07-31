@@ -1,0 +1,7 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+  ?result geo:sfContains "POINT(73.5214547 1.8638413)"^^geo:wktLiteral .
+}

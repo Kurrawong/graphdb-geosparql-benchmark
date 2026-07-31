@@ -1,0 +1,8 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+PREFIX geom: <https://osm2rdf.cs.uni-freiburg.de/rdf/geom#>
+
+SELECT ?result ?wkt
+WHERE {
+  geom:osmnode_4707747257 geo:sfWithin ?result .
+  ?result geo:asWKT ?wkt .
+}

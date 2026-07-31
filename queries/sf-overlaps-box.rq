@@ -1,0 +1,7 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+  ?result geo:sfOverlaps "POLYGON((73.520 1.855, 73.530 1.855, 73.530 1.865, 73.520 1.865, 73.520 1.855))"^^geo:wktLiteral .
+}

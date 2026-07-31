@@ -104,22 +104,49 @@ Sorting and hashing happen in the client after the timed HTTP request.
 | --- | --- | --- |
 | `sf-within-region` | `?geometry geo:sfWithin REGION` | Existing high-cardinality baseline |
 | `sf-intersects-region` | `?geometry geo:sfIntersects REGION` | Envelope candidates followed by exact evaluation |
-| `sf-disjoint-region` | `?geometry geo:sfDisjoint REGION` | Full index scan with materialised output |
-| `sf-disjoint-cover` | `?geometry geo:sfDisjoint DATASET_COVER` | Full index scan with minimal response-transfer cost |
+| `sf-disjoint-region` | `?geometry geo:sfDisjoint REGION` | High-cardinality disjoint evaluation with substantial result transfer |
+| `sf-disjoint-cover` | `?geometry geo:sfDisjoint DATASET_COVER` | Zero-result disjoint evaluation with minimal response-transfer cost |
 | `sf-contains-point` | `?geometry geo:sfContains INTERIOR_POINT` | Selective inverse relation |
 | `sf-touches-vertex` | `?geometry geo:sfTouches VERTEX_POINT` | Boundary-sensitive exact evaluation |
-| `sf-crosses-line` | `?geometry geo:sfCrosses CROSSING_LINE` | Line/area topology |
+| `sf-crosses-line` | `?geometry geo:sfCrosses CROSSING_LINE` | Behavioural comparison of asymmetric GeoSPARQL and symmetric JTS crossing semantics |
+| `sf-crosses-line-compatible` | `CROSSING_LINE geo:sfCrosses ?geometry` | Matching `L/A` and `L/L` crossing results for performance comparison |
 | `sf-overlaps-box` | `?geometry geo:sfOverlaps OVERLAP_BOX` | Polygon/polygon topology |
-| `sf-equals-point` | `?geometry geo:sfEquals VERTEX_POINT` | Highly selective equality |
+| `sf-equals-point` | `?geometry geo:sfEquals VERTEX_POINT` | Behavioural comparison of point equality semantics |
+| `sf-equals-line` | `?geometry geo:sfEquals KNOWN_LINE` | Matching selective line equality for performance comparison |
 | `subject-bound-within` | `KNOWN_NODE geo:sfWithin ?geometry` | Subject-bound candidate traversal and argument order |
 | `bound-bound-within` | `KNOWN_NODE geo:sfWithin KNOWN_POLYGON` | Exact evaluation with Lucene bypassed |
 
 The `sfDisjoint` cases are intentionally separate. `sf-disjoint-region`
-measures both the full scan and a substantial result transfer.
-`sf-disjoint-cover` uses a polygon that covers the retained dataset so that the
-plugin still scans and evaluates the complete index but returns few or no rows.
-This isolates the server-side full-scan cost from JSON serialisation and
-transfer.
+measures a high-cardinality disjoint query together with a substantial result
+transfer. `sf-disjoint-cover` uses a polygon that covers the retained dataset
+and therefore returns no rows. This isolates the server-side candidate
+selection and relation-evaluation cost from JSON serialisation and transfer
+without assuming that either implementation uses a particular index strategy.
+
+The original `sf-crosses-line` and `sf-equals-point` cases are retained as
+behavioural comparisons because their outputs differ between the
+implementations:
+
+- GeoSPARQL 1.1 defines `sfCrosses` for `P/L`, `P/A`, `L/A`, and `L/L`.
+  The original query places each candidate geometry on the left and the line
+  on the right. v1 follows JTS's symmetric extension and also returns `A/L`
+  polygon matches, while v2 follows the GeoSPARQL type directions.
+- GeoSPARQL 1.1 prescribes the `TFFFTFFFT` matrix for `sfEquals`. v2 applies
+  that matrix to the point case, while v1 follows JTS topological equality
+  (`T*F**FFF*`).
+
+Those two cases measure and document observable query behaviour, but their
+latencies are not like-for-like performance comparisons because their outputs
+differ. Each therefore has a companion query whose outputs are expected to
+match:
+
+- `sf-crosses-line-compatible` places `CROSSING_LINE` on the left, exercising
+  the GeoSPARQL-defined `L/A` and `L/L` directions in both variants.
+- `sf-equals-line` compares against an existing LineString. Equal non-empty
+  lines satisfy both the GeoSPARQL matrix and JTS topological equality.
+
+The generated report must only calculate cross-variant performance ratios for
+queries whose complete canonical outputs match.
 
 ## Fixed query geometries
 
@@ -135,15 +162,15 @@ POLYGON((
 ))
 ```
 
-The proposed `DATASET_COVER` is:
+The validated `DATASET_COVER` is:
 
 ```text
 POLYGON((49 -2, 81 -2, 81 27, 49 27, 49 -2))
 ```
 
-It must be validated once against all retained source geometries before being
-frozen. The expected `sf-disjoint-cover` result is empty or otherwise
-explicitly documented.
+All source WKT coordinates fall strictly inside this polygon. The calibrated
+`sf-disjoint-cover` result is empty for both variants, while each implementation
+still exercises its relation-specific candidate path.
 
 The selective topology constants are:
 
@@ -151,6 +178,10 @@ The selective topology constants are:
 INTERIOR_POINT = POINT(73.5214547 1.8638413)
 VERTEX_POINT   = POINT(73.5157973 1.8526223)
 CROSSING_LINE  = LINESTRING(73.510 1.860, 73.530 1.860)
+KNOWN_LINE     = LINESTRING(
+  73.5195271 1.8601495,
+  73.5188448 1.8587406
+)
 OVERLAP_BOX    = POLYGON((
   73.520 1.855,
   73.530 1.855,

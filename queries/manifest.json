@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "canonical_variables": [
+    "result",
+    "wkt"
+  ],
+  "queries": [
+    {
+      "id": "sf-within-region",
+      "file": "sf-within-region.rq",
+      "description": "High-cardinality regional containment baseline"
+    },
+    {
+      "id": "sf-intersects-region",
+      "file": "sf-intersects-region.rq",
+      "description": "Regional envelope candidates followed by exact intersection evaluation"
+    },
+    {
+      "id": "sf-disjoint-region",
+      "file": "sf-disjoint-region.rq",
+      "description": "High-cardinality regional-disjoint evaluation with substantial output"
+    },
+    {
+      "id": "sf-disjoint-cover",
+      "file": "sf-disjoint-cover.rq",
+      "description": "Zero-result disjoint evaluation against a dataset-covering polygon"
+    },
+    {
+      "id": "sf-contains-point",
+      "file": "sf-contains-point.rq",
+      "description": "Selective inverse containment relation"
+    },
+    {
+      "id": "sf-touches-vertex",
+      "file": "sf-touches-vertex.rq",
+      "description": "Boundary-sensitive point topology"
+    },
+    {
+      "id": "sf-crosses-line",
+      "file": "sf-crosses-line.rq",
+      "description": "Behavioural comparison of the Area/Line and Line/Line crossing directions"
+    },
+    {
+      "id": "sf-crosses-line-compatible",
+      "file": "sf-crosses-line-compatible.rq",
+      "description": "GeoSPARQL-defined Line/Area and Line/Line crossing directions with matching output"
+    },
+    {
+      "id": "sf-overlaps-box",
+      "file": "sf-overlaps-box.rq",
+      "description": "Polygon overlap topology"
+    },
+    {
+      "id": "sf-equals-point",
+      "file": "sf-equals-point.rq",
+      "description": "Behavioural comparison of point equality semantics"
+    },
+    {
+      "id": "sf-equals-line",
+      "file": "sf-equals-line.rq",
+      "description": "Highly selective line equality with matching output"
+    },
+    {
+      "id": "subject-bound-within",
+      "file": "subject-bound-within.rq",
+      "description": "Subject-bound candidate traversal"
+    },
+    {
+      "id": "bound-bound-within",
+      "file": "bound-bound-within.rq",
+      "description": "Bound-bound exact evaluation with Lucene bypassed"
+    }
+  ]
+}
