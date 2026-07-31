@@ -10,7 +10,9 @@ queries_dir="$(dirname "$manifest")"
 
 "$script_dir/validate-query-manifest.sh" "$manifest" "$queries_dir"
 
-manifest_hash="$(sha256sum "$manifest" | awk '{print $1}')"
+benchmark_definition_hash="$(
+  "$script_dir/benchmark-definition-sha256.sh" "$manifest" "$queries_dir"
+)"
 v1_suite="$results_root/v1/suite.json"
 v2_suite="$results_root/v2/suite.json"
 v1_index="$results_root/v1/index-metrics.json"
@@ -31,12 +33,12 @@ done
 expected_queries="$(jq --compact-output '[.queries[].id] | sort' "$manifest")"
 for suite_file in "$v1_suite" "$v2_suite"; do
   jq --exit-status \
-    --arg manifest_sha256 "$manifest_hash" \
+    --arg benchmark_definition_sha256 "$benchmark_definition_hash" \
     --argjson expected_queries "$expected_queries" \
     '
-      .schema_version == 1 and
+      .schema_version == 2 and
       .graphdb_version == "11.4.0" and
-      .manifest_sha256 == $manifest_sha256 and
+      .benchmark_definition_sha256 == $benchmark_definition_sha256 and
       (.warmups | type == "number") and
       (.measured_runs | type == "number" and . > 0) and
       .queries == $expected_queries

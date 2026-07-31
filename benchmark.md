@@ -62,7 +62,11 @@ A complete comparison runs the following ordered lifecycle:
 8. Generate a report only after both suites complete successfully.
 
 The benchmark must not reuse a repository or spatial index from a previous
-suite. A failed suite must not be reported using stale measurements.
+suite. A failed suite must not be reported using stale measurements. Each
+completed suite records a benchmark-definition fingerprint covering the
+manifest, every referenced predicate query, and the geometry-corpus query. The
+report rejects results when that fingerprint no longer matches the current
+benchmark definition.
 
 ## Query construction
 

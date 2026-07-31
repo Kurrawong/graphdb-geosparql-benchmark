@@ -319,19 +319,21 @@ if [ -z "$selected_query" ]; then
     exit 1
   fi
 
-  manifest_hash="$(sha256sum "$manifest" | awk '{print $1}')"
+  benchmark_definition_hash="$(
+    "$(dirname "$0")/benchmark-definition-sha256.sh" "$manifest" "$queries_dir"
+  )"
   jq --slurp \
     --arg variant "$variant" \
     --arg plugin_revision "$plugin_revision" \
-    --arg manifest_sha256 "$manifest_hash" \
+    --arg benchmark_definition_sha256 "$benchmark_definition_hash" \
     --argjson warmups "$warmups" \
     --argjson measured_runs "$runs" \
     '{
-      schema_version: 1,
+      schema_version: 2,
       variant: $variant,
       graphdb_version: "11.4.0",
       plugin_revision: $plugin_revision,
-      manifest_sha256: $manifest_sha256,
+      benchmark_definition_sha256: $benchmark_definition_sha256,
       warmups: $warmups,
       measured_runs: $measured_runs,
       queries: (sort_by(.query_id) | map(.query_id))

@@ -38,7 +38,7 @@ task v2:up
 
 The v1 and v2 services use separate GraphDB homes, so configure the license once
 for each variant. The clean tasks preserve those homes and their licenses. See
-the [GraphDB license documentation](https://graphdb.ontotext.com/documentation/11.2/set-up-your-license.html)
+the [GraphDB 11.4 license documentation](https://graphdb.ontotext.com/documentation/11.4/set-up-your-license.html)
 for the Workbench and file-based installation options.
 
 ## Start a benchmark variant
@@ -145,7 +145,9 @@ BENCHMARK_WARMUPS=1 BENCHMARK_RUNS=5 task benchmark:all
 ```
 
 `task benchmark:report` refuses incomplete, stale, or differently configured
-suites. It prints the report to standard output and saves it as
+suites. Staleness is detected from a fingerprint covering the manifest, every
+referenced benchmark query, and the geometry-corpus query. It prints the report
+to standard output and saves it as
 `benchmark-results/report.md`. For each query, the report contains minimum,
 median, and maximum response times, row counts, output equality, and the
 relative v1/v2 median. It also reports spatial indexing time and size, plugin
@@ -153,6 +155,14 @@ revisions, corpus equality, and the `sfIntersects`/`sfDisjoint` partition check.
 When outputs differ, the report is still written with the behavioural
 difference, but the affected performance ratio is marked unavailable and the
 report task exits unsuccessfully.
+
+The `sf-crosses-line` and `sf-equals-point` queries deliberately expose known
+behavioural differences, so the current comparison is expected to write its
+complete report and then exit unsuccessfully for those mismatches. This does
+not mean the measurements failed. Use their matching-output companion queries,
+`sf-crosses-line-compatible` and `sf-equals-line`, for like-for-like performance
+comparisons. See [benchmark.md](benchmark.md#primary-query-matrix) for the
+semantic rationale.
 
 These suites deliberately rebuild the repository and index for each variant,
 so they take substantially longer than rerunning only a query. Every query is
@@ -199,13 +209,16 @@ benchmark-results/
 │   ├── index-metrics.json
 │   ├── suite.json
 │   ├── corpus/
+│   │   ├── curl.txt
 │   │   ├── results.json
 │   │   ├── results.canonical.jsonl
+│   │   ├── results.sha256
 │   │   └── summary.json
 │   └── queries/
 │       └── <query-id>/
 │           ├── summary.json
 │           └── run-<n>/
+│               ├── curl.txt
 │               ├── metrics.json
 │               ├── results.json
 │               ├── results.canonical.jsonl

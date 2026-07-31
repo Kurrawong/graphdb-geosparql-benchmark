@@ -52,6 +52,20 @@ for variant in v1 v2; do
     }' > "$results_dir/$variant/index-metrics.json"
 done
 
+expected_definition_hash="$(
+  "$repository_dir/scripts/benchmark-definition-sha256.sh" \
+    "$repository_dir/queries/manifest.json" \
+    "$repository_dir/queries"
+)"
+for suite_file in "$results_dir/v1/suite.json" "$results_dir/v2/suite.json"; do
+  jq --exit-status \
+    --arg expected_definition_hash "$expected_definition_hash" \
+    '
+      .schema_version == 2 and
+      .benchmark_definition_sha256 == $expected_definition_hash
+    ' "$suite_file" >/dev/null
+done
+
 report_file="$results_dir/report.md"
 "$repository_dir/scripts/generate-benchmark-report.sh" \
   "$repository_dir/queries/manifest.json" \
@@ -73,6 +87,18 @@ assert_report_contains \
 assert_report_contains 'v1 intersects/disjoint partition: **PASS**'
 assert_report_contains 'v2 intersects/disjoint partition: **PASS**'
 assert_report_contains 'v1/v2 canonical geometry corpus: **MATCH** (2 / 2 rows)'
+
+changed_queries_dir="$temporary_dir/changed-queries"
+cp -R "$repository_dir/queries" "$changed_queries_dir"
+printf '\n# Fingerprint regression test\n' \
+  >> "$changed_queries_dir/sf-within-region.rq"
+if "$repository_dir/scripts/generate-benchmark-report.sh" \
+  "$changed_queries_dir/manifest.json" \
+  "$results_dir" \
+  "$report_file" >/dev/null 2>&1; then
+  echo "Report unexpectedly accepted results from a changed query definition" >&2
+  exit 1
+fi
 
 v2_summary="$results_dir/v2/queries/sf-equals-point/summary.json"
 jq '.canonical_sha256 = ("0" * 64)' "$v2_summary" \
