@@ -12,16 +12,18 @@ implementations running in the same GraphDB 11.4.0 environment:
 
 The comparison covers:
 
-1. spatial index build time and size;
+1. spatial index build time, size, and configuration;
 2. index-backed spatial predicate response time;
-3. returned row counts and complete result multisets; and
-4. behavioural differences such as failures or unequal results.
+3. full-scan scalar baselines for large-region `sfWithin` and `sfIntersects`;
+4. returned row counts and complete result multisets; and
+5. behavioural differences such as failures or unequal results.
 
 The primary suite uses the Maldives OSM dataset and tests the public
-index-backed `geo:` property relations. Scalar `geof:` functions and controlled
-fixtures for projected coordinate systems, geometry collections, Egenhofer,
-RCC8, DE-9IM, and incremental updates are outside the primary suite and will be
-considered separately.
+index-backed `geo:` property relations. It includes two targeted scalar `geof:`
+baselines for measuring index effectiveness. Controlled fixtures for projected
+coordinate systems, geometry collections, Egenhofer, RCC8, DE-9IM, and
+incremental updates are outside the primary suite and will be considered
+separately.
 
 ## Controlled environment
 
@@ -76,9 +78,11 @@ Primary queries use index-backed property relations such as:
 ?geometry geo:sfWithin "POLYGON(...)"^^geo:wktLiteral .
 ```
 
-They do not use an equivalent `FILTER(geof:sfWithin(...))`, because scalar
-functions bypass the plugin's Lucene candidate-selection path and measure a
-different execution mode.
+The indexed predicate queries do not use an equivalent
+`FILTER(geof:sfWithin(...))`, because scalar functions bypass the plugin's
+Lucene candidate-selection path and measure a different execution mode. Two
+separate scalar queries intentionally exercise that full-scan path using the
+same region and result projection as their indexed counterparts.
 
 Unless a query explicitly tests bound argument handling, its result shape is:
 
@@ -107,7 +111,9 @@ Sorting and hashing happen in the client after the timed HTTP request.
 | Query ID | Relation and shape | Intended coverage |
 | --- | --- | --- |
 | `sf-within-region` | `?geometry geo:sfWithin REGION` | Existing high-cardinality baseline |
+| `geof-within-region` | `FILTER(geof:sfWithin(?wkt, REGION))` | Full-scan baseline for indexed regional containment |
 | `sf-intersects-region` | `?geometry geo:sfIntersects REGION` | Envelope candidates followed by exact evaluation |
+| `geof-intersects-region` | `FILTER(geof:sfIntersects(?wkt, REGION))` | Full-scan baseline for indexed regional intersection |
 | `sf-disjoint-region` | `?geometry geo:sfDisjoint REGION` | High-cardinality disjoint evaluation with substantial result transfer |
 | `sf-disjoint-cover` | `?geometry geo:sfDisjoint DATASET_COVER` | Zero-result disjoint evaluation with minimal response-transfer cost |
 | `sf-contains-point` | `?geometry geo:sfContains INTERIOR_POINT` | Selective inverse relation |
@@ -119,6 +125,19 @@ Sorting and hashing happen in the client after the timed HTTP request.
 | `sf-equals-line` | `?geometry geo:sfEquals KNOWN_LINE` | Matching selective line equality for performance comparison |
 | `subject-bound-within` | `KNOWN_NODE geo:sfWithin ?geometry` | Subject-bound candidate traversal and argument order |
 | `bound-bound-within` | `KNOWN_NODE geo:sfWithin KNOWN_POLYGON` | Exact evaluation with Lucene bypassed |
+
+The scalar queries declare their indexed counterparts through
+`equivalent_to` in the query manifest. For each variant, the complete canonical
+outputs must match before the report calculates:
+
+```text
+index speedup = scalar-function median / indexed-property median
+```
+
+A value above 1 means the index-backed property query was faster; a value below
+1 means the scalar full scan was faster. This is the failure mode of interest
+for large query polygons. The Maldives corpus is a regression-scale analogue,
+not a reproduction of a much larger point-cloud workload.
 
 The `sfDisjoint` cases are intentionally separate. `sf-disjoint-region`
 measures a high-cardinality disjoint query together with a substantial result
@@ -235,8 +254,9 @@ For each query and variant, report all measured times and calculate the minimum,
 median, maximum, and relative v1/v2 median. The median is the primary comparative
 latency.
 
-Index build time and on-disk index size are recorded once per fresh variant
-suite and are not included in query response times.
+Index build time, on-disk index size, prefix-tree type, and precision are
+recorded once per fresh variant suite and are not included in query response
+times.
 
 ## Output validation
 
@@ -258,6 +278,11 @@ result sets must not overlap and together must cover the corpus. This invariant
 should be checked by canonical geometry identifiers rather than inferred only
 from counts.
 
+Every query with an `equivalent_to` declaration provides another invariant.
+For each variant, its row count and canonical hash must match the referenced
+query. An index-speedup ratio is only valid when this indexed/scalar output
+equivalence passes.
+
 Differences are reported rather than hidden. A report may describe a behavioural
 difference, but it must not present unequal or incomplete outputs as a valid
 performance comparison.
@@ -268,10 +293,11 @@ The final report should contain:
 
 - environment and revision metadata;
 - dataset and normalisation information;
-- spatial index build time and size;
+- spatial index build time, size, prefix tree, and precision;
 - one row per query with v1 and v2 timing statistics;
 - row counts and output-match status;
 - relative median performance;
+- per-variant indexed/scalar output equality and index speedup;
 - the intersects/disjoint partition check; and
 - any failures or behavioural differences.
 
@@ -285,7 +311,9 @@ The following are intentionally deferred:
 
 - representative Egenhofer and RCC8 relations;
 - caller-supplied DE-9IM `relate`;
-- scalar `geof:` functions;
+- small-region indexed/scalar comparisons;
+- feature-to-geometry join query shapes;
+- tiled large-region comparisons;
 - projected and cross-CRS fixtures;
 - controlled non-empty and empty `GEOMETRYCOLLECTION` fixtures;
 - WKT/GML compatibility;

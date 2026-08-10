@@ -46,8 +46,10 @@ for suite_file in "$v1_suite" "$v2_suite"; do
 done
 for index_file in "$v1_index" "$v2_index"; do
   jq --exit-status '
-    .schema_version == 1 and
+    .schema_version == 2 and
     (.variant == "v1" or .variant == "v2") and
+    (.prefix_tree | type == "string" and length > 0) and
+    (.precision | type == "number" and . > 0) and
     (.indexing_time_seconds | type == "number" and . >= 0) and
     (.index_size_bytes | type == "number" and . > 0)
   ' "$index_file" >/dev/null
@@ -136,6 +138,54 @@ for query_id in $(jq --raw-output '.queries[].id' "$manifest"); do
     "$output_status" >> "$rows_file"
 done
 
+equivalence_rows_file="$temporary_dir/equivalence-rows.md"
+equivalence_pairs_file="$temporary_dir/equivalence-pairs.tsv"
+: > "$equivalence_rows_file"
+jq --raw-output '
+  .queries[] |
+  select(.equivalent_to != null) |
+  [.id, .equivalent_to] |
+  @tsv
+' "$manifest" > "$equivalence_pairs_file"
+
+tab="$(printf '\t')"
+while IFS="$tab" read -r scalar_query indexed_query; do
+  for variant in v1 v2; do
+    scalar_summary="$results_root/$variant/queries/$scalar_query/summary.json"
+    indexed_summary="$results_root/$variant/queries/$indexed_query/summary.json"
+    scalar_rows="$(jq --raw-output '.row_count' "$scalar_summary")"
+    indexed_rows="$(jq --raw-output '.row_count' "$indexed_summary")"
+    scalar_hash="$(jq --raw-output '.canonical_sha256' "$scalar_summary")"
+    indexed_hash="$(jq --raw-output '.canonical_sha256' "$indexed_summary")"
+    scalar_median="$(jq --raw-output '.median_seconds' "$scalar_summary")"
+    indexed_median="$(jq --raw-output '.median_seconds' "$indexed_summary")"
+
+    if [ "$scalar_rows" = "$indexed_rows" ] &&
+      [ "$scalar_hash" = "$indexed_hash" ]; then
+      equivalence_status="MATCH"
+      index_speedup="$(
+        jq --null-input --raw-output \
+          --argjson scalar "$scalar_median" \
+          --argjson indexed "$indexed_median" \
+          '($scalar / $indexed * 1000 | round) / 1000'
+      )×"
+    else
+      equivalence_status="DIFFER"
+      index_speedup="n/a"
+      comparison_valid=false
+    fi
+
+    printf '| %s | `%s` | `%s` | %s | %s | %s | %s |\n' \
+      "$variant" \
+      "$indexed_query" \
+      "$scalar_query" \
+      "$indexed_median" \
+      "$scalar_median" \
+      "$index_speedup" \
+      "$equivalence_status" >> "$equivalence_rows_file"
+  done
+done < "$equivalence_pairs_file"
+
 partition_statuses=""
 for variant in v1 v2; do
   intersects="$results_root/$variant/queries/sf-intersects-region/run-1/results.canonical.jsonl"
@@ -180,6 +230,10 @@ v1_index_time="$(jq --raw-output '.indexing_time_seconds' "$v1_index")"
 v2_index_time="$(jq --raw-output '.indexing_time_seconds' "$v2_index")"
 v1_index_size="$(jq --raw-output '.index_size_bytes' "$v1_index")"
 v2_index_size="$(jq --raw-output '.index_size_bytes' "$v2_index")"
+v1_prefix_tree="$(jq --raw-output '.prefix_tree' "$v1_index")"
+v2_prefix_tree="$(jq --raw-output '.prefix_tree' "$v2_index")"
+v1_precision="$(jq --raw-output '.precision' "$v1_index")"
+v2_precision="$(jq --raw-output '.precision' "$v2_index")"
 
 mkdir -p "$(dirname "$report_file")"
 {
@@ -191,10 +245,10 @@ mkdir -p "$(dirname "$report_file")"
   echo
   echo "Measured executions per query: $v1_runs"
   echo
-  echo "| Variant | Plugin revision | Index build (s) | Index size (bytes) |"
-  echo "| --- | --- | ---: | ---: |"
-  echo "| v1 | \`$v1_revision\` | $v1_index_time | $v1_index_size |"
-  echo "| v2 | \`$v2_revision\` | $v2_index_time | $v2_index_size |"
+  echo "| Variant | Plugin revision | Prefix tree | Precision | Index build (s) | Index size (bytes) |"
+  echo "| --- | --- | --- | ---: | ---: | ---: |"
+  echo "| v1 | \`$v1_revision\` | $v1_prefix_tree | $v1_precision | $v1_index_time | $v1_index_size |"
+  echo "| v2 | \`$v2_revision\` | $v2_prefix_tree | $v2_precision | $v2_index_time | $v2_index_size |"
   echo
   echo "## Query results"
   echo
@@ -204,6 +258,16 @@ mkdir -p "$(dirname "$report_file")"
   echo "| Query | v1 median (range) | v2 median (range) | v1/v2 | Rows v1/v2 | Output |"
   echo "| --- | ---: | ---: | ---: | ---: | --- |"
   cat "$rows_file"
+  echo
+  echo "## Index effectiveness"
+  echo
+  echo "The speedup is scalar-function median divided by indexed-property median."
+  echo "Values above 1 mean the spatial index was faster than the full scan."
+  echo "A speedup is only reported when the complete canonical outputs match."
+  echo
+  echo "| Variant | Indexed query | Scalar query | Indexed median (s) | Scalar median (s) | Index speedup | Output |"
+  echo "| --- | --- | --- | ---: | ---: | ---: | --- |"
+  cat "$equivalence_rows_file"
   echo
   echo "## Correctness checks"
   echo

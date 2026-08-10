@@ -8,14 +8,25 @@ queries_dir="${2:-queries}"
 jq --exit-status '
   .schema_version == 1 and
   .canonical_variables == ["result", "wkt"] and
-  (.queries | type == "array" and length == 13) and
+  (.queries | type == "array" and length > 0) and
   ([.queries[].id] | length == (unique | length)) and
   ([.queries[].file] | length == (unique | length)) and
+  (.queries | map(.id)) as $query_ids |
   all(
     .queries[];
+    .id as $query_id |
+    .equivalent_to as $equivalent_to |
     (.id | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$")) and
     (.file | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*[.]rq$")) and
-    (.description | type == "string" and length > 0)
+    (.description | type == "string" and length > 0) and
+    (
+      $equivalent_to == null or
+      (
+        ($equivalent_to | type == "string") and
+        $equivalent_to != $query_id and
+        ($query_ids | index($equivalent_to)) != null
+      )
+    )
   )
 ' "$manifest" >/dev/null
 

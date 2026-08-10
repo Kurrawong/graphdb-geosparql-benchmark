@@ -11,9 +11,21 @@
       "description": "High-cardinality regional containment baseline"
     },
     {
+      "id": "geof-within-region",
+      "file": "geof-within-region.rq",
+      "description": "Full-scan scalar-function baseline for regional containment",
+      "equivalent_to": "sf-within-region"
+    },
+    {
       "id": "sf-intersects-region",
       "file": "sf-intersects-region.rq",
       "description": "Regional envelope candidates followed by exact intersection evaluation"
+    },
+    {
+      "id": "geof-intersects-region",
+      "file": "geof-intersects-region.rq",
+      "description": "Full-scan scalar-function baseline for regional intersection",
+      "equivalent_to": "sf-intersects-region"
     },
     {
       "id": "sf-disjoint-region",

@@ -55,4 +55,13 @@ esac
 
 printf '{"head":{"vars":["result","wkt"]},"results":{"bindings":%s}}\n' \
   "$bindings" > "$output_file"
-printf '200\t%s\n' "${FAKE_CURL_TIME:-1.0}"
+
+case "$(basename "$query_file")" in
+  geof-*)
+    response_time="${FAKE_CURL_SCALAR_TIME:-${FAKE_CURL_TIME:-1.0}}"
+    ;;
+  *)
+    response_time="${FAKE_CURL_TIME:-1.0}"
+    ;;
+esac
+printf '200\t%s\n' "$response_time"

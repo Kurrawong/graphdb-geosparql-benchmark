@@ -65,8 +65,8 @@ Each `up` task:
 5. Imports the dataset when the repository is empty.
 6. Removes `geo:asWKT` literals containing `GEOMETRYCOLLECTION`, reporting the
    number removed and the update time.
-7. Enables the GeoSPARQL spatial index and reports its build time and on-disk
-   size.
+7. Enables the GeoSPARQL spatial index and reports its build time, on-disk
+   size, prefix-tree type, and precision.
 
 The same unsupported WKT values are removed from both repositories so the
 variants are benchmarked against equivalent data. The v1 task also configures
@@ -123,7 +123,7 @@ Each variant suite performs the same lifecycle:
    `maldives` repository and GeoSPARQL index.
 4. Recreates the repository, imports the dataset, removes the same unsupported
    `GEOMETRYCOLLECTION` WKT literals, and builds a new spatial index.
-5. Runs the 13 queries listed in
+5. Runs all queries listed in
    [`queries/manifest.json`](queries/manifest.json), with one warm-up and three
    measured executions of each query by default.
 6. Captures the complete canonical geometry corpus for correctness checks.
@@ -150,11 +150,24 @@ referenced benchmark query, and the geometry-corpus query. It prints the report
 to standard output and saves it as
 `benchmark-results/report.md`. For each query, the report contains minimum,
 median, and maximum response times, row counts, output equality, and the
-relative v1/v2 median. It also reports spatial indexing time and size, plugin
-revisions, corpus equality, and the `sfIntersects`/`sfDisjoint` partition check.
+relative v1/v2 median. It also reports spatial indexing time, size, prefix tree,
+and precision; plugin revisions; corpus equality; and the
+`sfIntersects`/`sfDisjoint` partition check.
 When outputs differ, the report is still written with the behavioural
 difference, but the affected performance ratio is marked unavailable and the
 report task exits unsuccessfully.
+
+The suite includes full-scan `geof:sfWithin` and `geof:sfIntersects` scalar
+baselines for the same large Maldives region as their indexed `geo:` property
+queries. The report verifies that each indexed/scalar pair has identical
+canonical output before reporting its index speedup:
+
+```text
+index speedup = scalar-function median / indexed-property median
+```
+
+Values above 1 mean the spatial index was faster; values below 1 mean the
+full scan was faster.
 
 The `sf-crosses-line` and `sf-equals-point` queries deliberately expose known
 behavioural differences, so the current comparison is expected to write its
