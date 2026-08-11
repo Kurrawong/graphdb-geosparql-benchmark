@@ -33,6 +33,31 @@ if "$repository_dir/scripts/validate-query-manifest.sh" \
   exit 1
 fi
 
+invalid_output_expectation_manifest="$temporary_dir/invalid-output-expectation-manifest.json"
+jq '(.queries[] | select(.id == "sf-crosses-line") | .cross_variant_output) = "sometimes"' \
+  "$repository_dir/queries/manifest.json" > "$invalid_output_expectation_manifest"
+if "$repository_dir/scripts/validate-query-manifest.sh" \
+  "$invalid_output_expectation_manifest" "$repository_dir/queries" >/dev/null 2>&1; then
+  echo "Manifest validation unexpectedly accepted an invalid cross-variant output expectation" >&2
+  exit 1
+fi
+
+changed_output_expectation_manifest="$temporary_dir/changed-output-expectation-manifest.json"
+sed 's/"cross_variant_output": "different"/"cross_variant_output": "match"/' \
+  "$repository_dir/queries/manifest.json" > "$changed_output_expectation_manifest"
+original_execution_hash="$(
+  "$repository_dir/scripts/benchmark-definition-sha256.sh" \
+    "$repository_dir/queries/manifest.json" "$repository_dir/queries"
+)"
+changed_expectation_execution_hash="$(
+  "$repository_dir/scripts/benchmark-definition-sha256.sh" \
+    "$changed_output_expectation_manifest" "$repository_dir/queries"
+)"
+if [ "$original_execution_hash" != "$changed_expectation_execution_hash" ]; then
+  echo "Report-only output expectations unexpectedly changed the execution fingerprint" >&2
+  exit 1
+fi
+
 for variant in v1 v2; do
   mkdir -p "$results_dir/$variant"
   if [ "$variant" = "v1" ]; then
@@ -52,6 +77,7 @@ for variant in v1 v2; do
   PATH="$fake_path" \
     FAKE_CURL_TIME="$fake_time" \
     FAKE_CURL_SCALAR_TIME="$scalar_time" \
+    FAKE_VARIANT="$variant" \
     BENCHMARK_RESULTS_DIR="$results_dir" \
     BENCHMARK_WARMUPS=1 \
     BENCHMARK_RUNS=3 \
@@ -106,12 +132,17 @@ assert_report_contains() {
   fi
 }
 
-assert_report_contains 'Overall comparison: **VALID**'
+assert_report_contains 'Benchmark execution: **COMPLETE**'
+assert_report_contains 'Correctness expectations: **PASS**'
+assert_report_contains 'Cross-variant outputs: **17 matching, 2 expected differences, 0 unexpected results**'
+assert_report_contains '| `sf-crosses-line` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | n/a | 1 / 0 | EXPECTED DIFFERENCE |'
 assert_report_contains \
   '| `sf-within-region` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | 2× |'
 assert_report_contains '| v1 | `sf-within-region` | `geof-within-region` | 4.0 | 8.0 | 2× | MATCH |'
 assert_report_contains '| v2 | `sf-within-region` | `geof-within-region` | 2.0 | 6.0 | 3× | MATCH |'
 assert_report_contains '| v1 | `sf-intersects-region` | `geof-intersects-region` | 4.0 | 8.0 | 2× | MATCH |'
+assert_report_contains '| v2 | `sf-within-selective-region` | `geof-within-selective-region` | 2.0 | 6.0 | 3× | MATCH |'
+assert_report_contains '| v2 | `sf-intersects-selective-region` | `geof-intersects-selective-region` | 2.0 | 6.0 | 3× | MATCH |'
 assert_report_contains '| v1 | `bundled-with-graphdb-11.4.0` | QUAD | 11 | 10.0 | 1000 |'
 assert_report_contains 'v1 intersects/disjoint partition: **PASS**'
 assert_report_contains 'v2 intersects/disjoint partition: **PASS**'
@@ -148,7 +179,8 @@ jq --arg canonical_sha256 "$v1_scalar_hash" \
   > "$v1_scalar_summary.part"
 mv "$v1_scalar_summary.part" "$v1_scalar_summary"
 
-v2_summary="$results_dir/v2/queries/sf-equals-point/summary.json"
+v2_summary="$results_dir/v2/queries/sf-contains-point/summary.json"
+v2_summary_hash="$(jq --raw-output '.canonical_sha256' "$v2_summary")"
 jq '.canonical_sha256 = ("0" * 64)' "$v2_summary" \
   > "$v2_summary.part"
 mv "$v2_summary.part" "$v2_summary"
@@ -157,9 +189,36 @@ if "$repository_dir/scripts/generate-benchmark-report.sh" \
   "$repository_dir/queries/manifest.json" \
   "$results_dir" \
   "$report_file" >/dev/null; then
-  echo "Report unexpectedly accepted unequal output" >&2
+  echo "Report unexpectedly accepted an undeclared output difference" >&2
   exit 1
 fi
-assert_report_contains 'Overall comparison: **INVALID**'
+assert_report_contains '| `sf-contains-point` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | n/a | 1 / 1 | UNEXPECTED DIFFERENCE |'
+assert_report_contains 'Correctness expectations: **FAIL**'
+assert_report_contains 'Cross-variant outputs: **16 matching, 2 expected differences, 1 unexpected results**'
+jq --arg canonical_sha256 "$v2_summary_hash" \
+  '.canonical_sha256 = $canonical_sha256' "$v2_summary" \
+  > "$v2_summary.part"
+mv "$v2_summary.part" "$v2_summary"
+
+v1_expected_difference="$results_dir/v1/queries/sf-equals-point/summary.json"
+v2_expected_difference="$results_dir/v2/queries/sf-equals-point/summary.json"
+v1_expected_rows="$(jq --raw-output '.row_count' "$v1_expected_difference")"
+v1_expected_hash="$(jq --raw-output '.canonical_sha256' "$v1_expected_difference")"
+jq \
+  --argjson row_count "$v1_expected_rows" \
+  --arg canonical_sha256 "$v1_expected_hash" \
+  '.row_count = $row_count | .canonical_sha256 = $canonical_sha256' \
+  "$v2_expected_difference" > "$v2_expected_difference.part"
+mv "$v2_expected_difference.part" "$v2_expected_difference"
+
+if "$repository_dir/scripts/generate-benchmark-report.sh" \
+  "$repository_dir/queries/manifest.json" \
+  "$results_dir" \
+  "$report_file" >/dev/null; then
+  echo "Report unexpectedly accepted an expected output difference that disappeared" >&2
+  exit 1
+fi
+assert_report_contains '| `sf-equals-point` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | 2× | 1 / 1 | UNEXPECTED MATCH |'
+assert_report_contains 'Cross-variant outputs: **17 matching, 1 expected differences, 1 unexpected results**'
 
 echo "Benchmark script tests passed"

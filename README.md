@@ -146,33 +146,40 @@ BENCHMARK_WARMUPS=1 BENCHMARK_RUNS=5 task benchmark:all
 
 `task benchmark:report` refuses incomplete, stale, or differently configured
 suites. Staleness is detected from a fingerprint covering the manifest, every
-referenced benchmark query, and the geometry-corpus query. It prints the report
-to standard output and saves it as
+referenced benchmark query, and the geometry-corpus query. Report-only
+`cross_variant_output` expectations are excluded because changing them does not
+change query execution. The task prints the report to standard output and saves
+it as
 `benchmark-results/report.md`. For each query, the report contains minimum,
 median, and maximum response times, row counts, output equality, and the
 relative v1/v2 median. It also reports spatial indexing time, size, prefix tree,
 and precision; plugin revisions; corpus equality; and the
 `sfIntersects`/`sfDisjoint` partition check.
-When outputs differ, the report is still written with the behavioural
-difference, but the affected performance ratio is marked unavailable and the
-report task exits unsuccessfully.
+Cross-variant outputs are expected to match unless a query declares
+`"cross_variant_output": "different"` in the manifest. Expected differences
+are written with an unavailable performance ratio and do not fail the report.
+An undeclared difference, or a declared difference that unexpectedly
+disappears, fails the correctness check and makes the report task exit
+unsuccessfully.
 
 The suite includes full-scan `geof:sfWithin` and `geof:sfIntersects` scalar
-baselines for the same large Maldives region as their indexed `geo:` property
-queries. The report verifies that each indexed/scalar pair has identical
-canonical output before reporting its index speedup:
+baselines for the same large and selective Maldives regions as their indexed
+`geo:` property queries. The report verifies that each indexed/scalar pair has
+identical canonical output before reporting its index speedup:
 
 ```text
 index speedup = scalar-function median / indexed-property median
 ```
 
 Values above 1 mean the spatial index was faster; values below 1 mean the
-full scan was faster.
+full scan was faster. The large and selective regions show how index
+effectiveness changes with result selectivity.
 
 The `sf-crosses-line` and `sf-equals-point` queries deliberately expose known
-behavioural differences, so the current comparison is expected to write its
-complete report and then exit unsuccessfully for those mismatches. This does
-not mean the measurements failed. Use their matching-output companion queries,
+behavioural differences and declare those differences in the query manifest.
+They are reported as `EXPECTED DIFFERENCE`, while the final summary can still
+report `Benchmark execution: COMPLETE` and `Correctness expectations: PASS`.
+Use their matching-output companion queries,
 `sf-crosses-line-compatible` and `sf-equals-line`, for like-for-like performance
 comparisons. See [benchmark.md](benchmark.md#primary-query-matrix) for the
 semantic rationale.

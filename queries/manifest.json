@@ -17,6 +17,17 @@
       "equivalent_to": "sf-within-region"
     },
     {
+      "id": "sf-within-selective-region",
+      "file": "sf-within-selective-region.rq",
+      "description": "Selective indexed regional containment"
+    },
+    {
+      "id": "geof-within-selective-region",
+      "file": "geof-within-selective-region.rq",
+      "description": "Full-scan scalar-function baseline for selective regional containment",
+      "equivalent_to": "sf-within-selective-region"
+    },
+    {
       "id": "sf-intersects-region",
       "file": "sf-intersects-region.rq",
       "description": "Regional envelope candidates followed by exact intersection evaluation"
@@ -26,6 +37,17 @@
       "file": "geof-intersects-region.rq",
       "description": "Full-scan scalar-function baseline for regional intersection",
       "equivalent_to": "sf-intersects-region"
+    },
+    {
+      "id": "sf-intersects-selective-region",
+      "file": "sf-intersects-selective-region.rq",
+      "description": "Selective indexed regional intersection"
+    },
+    {
+      "id": "geof-intersects-selective-region",
+      "file": "geof-intersects-selective-region.rq",
+      "description": "Full-scan scalar-function baseline for selective regional intersection",
+      "equivalent_to": "sf-intersects-selective-region"
     },
     {
       "id": "sf-disjoint-region",
@@ -50,6 +72,7 @@
     {
       "id": "sf-crosses-line",
       "file": "sf-crosses-line.rq",
+      "cross_variant_output": "different",
       "description": "Behavioural comparison of the Area/Line and Line/Line crossing directions"
     },
     {
@@ -65,6 +88,7 @@
     {
       "id": "sf-equals-point",
       "file": "sf-equals-point.rq",
+      "cross_variant_output": "different",
       "description": "Behavioural comparison of point equality semantics"
     },
     {

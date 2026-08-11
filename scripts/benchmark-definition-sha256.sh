@@ -6,7 +6,12 @@ manifest="${1:-queries/manifest.json}"
 queries_dir="${2:-$(dirname "$manifest")}"
 
 {
-  printf 'manifest\t%s\n' "$(sha256sum "$manifest" | awk '{print $1}')"
+  manifest_execution_hash="$(
+    sed '/^[[:space:]]*"cross_variant_output":[[:space:]]/d' "$manifest" |
+      sha256sum |
+      awk '{print $1}'
+  )"
+  printf 'manifest\t%s\n' "$manifest_execution_hash"
 
   jq --raw-output '.queries[].file' "$manifest" |
     LC_ALL=C sort |

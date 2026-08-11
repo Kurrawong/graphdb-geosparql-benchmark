@@ -1,0 +1,13 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+PREFIX geof: <http://www.opengis.net/def/function/geosparql/>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+  FILTER(
+    geof:sfWithin(
+      ?wkt,
+      "POLYGON((73.50 1.83, 73.55 1.83, 73.55 1.88, 73.50 1.88, 73.50 1.83))"^^geo:wktLiteral
+    )
+  )
+}

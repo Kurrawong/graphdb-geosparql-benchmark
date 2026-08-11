@@ -16,6 +16,7 @@ jq --exit-status '
     .queries[];
     .id as $query_id |
     .equivalent_to as $equivalent_to |
+    .cross_variant_output as $cross_variant_output |
     (.id | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$")) and
     (.file | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*[.]rq$")) and
     (.description | type == "string" and length > 0) and
@@ -26,6 +27,11 @@ jq --exit-status '
         $equivalent_to != $query_id and
         ($query_ids | index($equivalent_to)) != null
       )
+    ) and
+    (
+      $cross_variant_output == null or
+      $cross_variant_output == "match" or
+      $cross_variant_output == "different"
     )
   )
 ' "$manifest" >/dev/null

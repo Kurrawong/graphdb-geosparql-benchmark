@@ -74,7 +74,10 @@ fi
 
 temporary_dir="$(mktemp -d)"
 report_part="$report_file.part"
-comparison_valid=true
+correctness_valid=true
+matching_outputs=0
+expected_differences=0
+unexpected_results=0
 cleanup() {
   rm -rf -- "$temporary_dir"
   rm -f "$report_part"
@@ -114,19 +117,39 @@ for query_id in $(jq --raw-output '.queries[].id' "$manifest"); do
   v2_rows="$(jq --raw-output '.row_count' "$v2_summary")"
   v1_hash="$(jq --raw-output '.canonical_sha256' "$v1_summary")"
   v2_hash="$(jq --raw-output '.canonical_sha256' "$v2_summary")"
+  expected_output="$(
+    jq --raw-output --arg query_id "$query_id" '
+      .queries[] |
+      select(.id == $query_id) |
+      (.cross_variant_output // "match")
+    ' "$manifest"
+  )"
 
   if [ "$v1_rows" = "$v2_rows" ] && [ "$v1_hash" = "$v2_hash" ]; then
-    output_status="MATCH"
     speed_ratio="$(
       jq --null-input --raw-output \
         --argjson v1 "$v1_median" \
         --argjson v2 "$v2_median" \
         '($v1 / $v2 * 1000 | round) / 1000'
     )×"
+    if [ "$expected_output" = "match" ]; then
+      output_status="MATCH"
+      matching_outputs=$((matching_outputs + 1))
+    else
+      output_status="UNEXPECTED MATCH"
+      unexpected_results=$((unexpected_results + 1))
+      correctness_valid=false
+    fi
   else
-    output_status="DIFFER"
     speed_ratio="n/a"
-    comparison_valid=false
+    if [ "$expected_output" = "different" ]; then
+      output_status="EXPECTED DIFFERENCE"
+      expected_differences=$((expected_differences + 1))
+    else
+      output_status="UNEXPECTED DIFFERENCE"
+      unexpected_results=$((unexpected_results + 1))
+      correctness_valid=false
+    fi
   fi
 
   printf '| `%s` | %s (%s–%s) | %s (%s–%s) | %s | %s / %s | %s |\n' \
@@ -172,7 +195,7 @@ while IFS="$tab" read -r scalar_query indexed_query; do
     else
       equivalence_status="DIFFER"
       index_speedup="n/a"
-      comparison_valid=false
+      correctness_valid=false
     fi
 
     printf '| %s | `%s` | `%s` | %s | %s | %s | %s |\n' \
@@ -207,7 +230,7 @@ for variant in v1 v2; do
     partition_status="PASS"
   else
     partition_status="FAIL"
-    comparison_valid=false
+    correctness_valid=false
   fi
   partition_statuses="$partition_statuses $variant=$partition_status"
 done
@@ -221,7 +244,7 @@ if [ "$v1_corpus_rows" = "$v2_corpus_rows" ] &&
   corpus_status="MATCH"
 else
   corpus_status="DIFFER"
-  comparison_valid=false
+  correctness_valid=false
 fi
 
 v1_revision="$(jq --raw-output '.plugin_revision' "$v1_suite")"
@@ -254,6 +277,8 @@ mkdir -p "$(dirname "$report_file")"
   echo
   echo "Times are median seconds with the measured minimum–maximum in parentheses."
   echo "The ratio is v1 median divided by v2 median; values above 1 favour v2."
+  echo "Output expectations default to matching; declared behavioural differences are labelled EXPECTED DIFFERENCE."
+  echo "UNEXPECTED DIFFERENCE and UNEXPECTED MATCH both fail the correctness expectations."
   echo
   echo "| Query | v1 median (range) | v2 median (range) | v1/v2 | Rows v1/v2 | Output |"
   echo "| --- | ---: | ---: | ---: | ---: | --- |"
@@ -278,11 +303,13 @@ mkdir -p "$(dirname "$report_file")"
   done
   echo "- v1/v2 canonical geometry corpus: **$corpus_status** ($v1_corpus_rows / $v2_corpus_rows rows)"
   echo
-  if [ "$comparison_valid" = true ]; then
-    echo "Overall comparison: **VALID**"
+  echo "Benchmark execution: **COMPLETE**"
+  if [ "$correctness_valid" = true ]; then
+    echo "Correctness expectations: **PASS**"
   else
-    echo "Overall comparison: **INVALID**"
+    echo "Correctness expectations: **FAIL**"
   fi
+  echo "Cross-variant outputs: **$matching_outputs matching, $expected_differences expected differences, $unexpected_results unexpected results**"
 } > "$report_part"
 mv "$report_part" "$report_file"
 
@@ -290,6 +317,6 @@ cat "$report_file"
 echo
 echo "Saved benchmark report to $report_file"
 
-if [ "$comparison_valid" != true ]; then
+if [ "$correctness_valid" != true ]; then
   exit 1
 fi

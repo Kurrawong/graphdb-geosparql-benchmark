@@ -14,16 +14,17 @@ The comparison covers:
 
 1. spatial index build time, size, and configuration;
 2. index-backed spatial predicate response time;
-3. full-scan scalar baselines for large-region `sfWithin` and `sfIntersects`;
+3. full-scan scalar baselines for large and selective-region `sfWithin` and
+   `sfIntersects`;
 4. returned row counts and complete result multisets; and
 5. behavioural differences such as failures or unequal results.
 
 The primary suite uses the Maldives OSM dataset and tests the public
-index-backed `geo:` property relations. It includes two targeted scalar `geof:`
-baselines for measuring index effectiveness. Controlled fixtures for projected
-coordinate systems, geometry collections, Egenhofer, RCC8, DE-9IM, and
-incremental updates are outside the primary suite and will be considered
-separately.
+index-backed `geo:` property relations. It includes targeted scalar `geof:`
+baselines for measuring index effectiveness at two selectivity levels.
+Controlled fixtures for projected coordinate systems, geometry collections,
+Egenhofer, RCC8, DE-9IM, and incremental updates are outside the primary suite
+and will be considered separately.
 
 ## Controlled environment
 
@@ -80,9 +81,9 @@ Primary queries use index-backed property relations such as:
 
 The indexed predicate queries do not use an equivalent
 `FILTER(geof:sfWithin(...))`, because scalar functions bypass the plugin's
-Lucene candidate-selection path and measure a different execution mode. Two
-separate scalar queries intentionally exercise that full-scan path using the
-same region and result projection as their indexed counterparts.
+Lucene candidate-selection path and measure a different execution mode. Four
+scalar queries intentionally exercise that full-scan path using the same large
+or selective region and result projection as their indexed counterparts.
 
 Unless a query explicitly tests bound argument handling, its result shape is:
 
@@ -112,8 +113,12 @@ Sorting and hashing happen in the client after the timed HTTP request.
 | --- | --- | --- |
 | `sf-within-region` | `?geometry geo:sfWithin REGION` | Existing high-cardinality baseline |
 | `geof-within-region` | `FILTER(geof:sfWithin(?wkt, REGION))` | Full-scan baseline for indexed regional containment |
+| `sf-within-selective-region` | `?geometry geo:sfWithin SELECTIVE_REGION` | Selective indexed regional containment |
+| `geof-within-selective-region` | `FILTER(geof:sfWithin(?wkt, SELECTIVE_REGION))` | Full-scan baseline for selective regional containment |
 | `sf-intersects-region` | `?geometry geo:sfIntersects REGION` | Envelope candidates followed by exact evaluation |
 | `geof-intersects-region` | `FILTER(geof:sfIntersects(?wkt, REGION))` | Full-scan baseline for indexed regional intersection |
+| `sf-intersects-selective-region` | `?geometry geo:sfIntersects SELECTIVE_REGION` | Selective indexed regional intersection |
+| `geof-intersects-selective-region` | `FILTER(geof:sfIntersects(?wkt, SELECTIVE_REGION))` | Full-scan baseline for selective regional intersection |
 | `sf-disjoint-region` | `?geometry geo:sfDisjoint REGION` | High-cardinality disjoint evaluation with substantial result transfer |
 | `sf-disjoint-cover` | `?geometry geo:sfDisjoint DATASET_COVER` | Zero-result disjoint evaluation with minimal response-transfer cost |
 | `sf-contains-point` | `?geometry geo:sfContains INTERIOR_POINT` | Selective inverse relation |
@@ -135,9 +140,11 @@ index speedup = scalar-function median / indexed-property median
 ```
 
 A value above 1 means the index-backed property query was faster; a value below
-1 means the scalar full scan was faster. This is the failure mode of interest
-for large query polygons. The Maldives corpus is a regression-scale analogue,
-not a reproduction of a much larger point-cloud workload.
+1 means the scalar full scan was faster. The large region measures the
+low-selectivity failure mode where most of the corpus matches. The selective
+region measures the complementary case where the index can discard most of the
+corpus. The Maldives corpus is a regression-scale analogue, not a reproduction
+of a much larger point-cloud workload.
 
 The `sfDisjoint` cases are intentionally separate. `sf-disjoint-region`
 measures a high-cardinality disjoint query together with a substantial result
@@ -160,8 +167,9 @@ implementations:
 
 Those two cases measure and document observable query behaviour, but their
 latencies are not like-for-like performance comparisons because their outputs
-differ. Each therefore has a companion query whose outputs are expected to
-match:
+differ. Their manifest entries declare `cross_variant_output` as `different`,
+making the known behaviour an explicit correctness expectation. Each therefore
+also has a companion query whose outputs are expected to match:
 
 - `sf-crosses-line-compatible` places `CROSSING_LINE` on the left, exercising
   the GeoSPARQL-defined `L/A` and `L/L` directions in both variants.
@@ -194,6 +202,16 @@ POLYGON((49 -2, 81 -2, 81 27, 49 27, 49 -2))
 All source WKT coordinates fall strictly inside this polygon. The calibrated
 `sf-disjoint-cover` result is empty for both variants, while each implementation
 still exercises its relation-specific candidate path.
+
+The calibrated `SELECTIVE_REGION` is:
+
+```text
+POLYGON((73.50 1.83, 73.55 1.83, 73.55 1.88, 73.50 1.88, 73.50 1.83))
+```
+
+During calibration this region selected less than 1% of the retained corpus
+for both `sfWithin` and `sfIntersects`. Exact row counts and canonical outputs
+are validated at benchmark time rather than hard-coded.
 
 The selective topology constants are:
 
@@ -261,14 +279,17 @@ times.
 ## Output validation
 
 Performance results are meaningful only when the implementations return
-equivalent output.
+equivalent output. Behavioural tests may instead declare an expected
+cross-variant difference, but they do not produce a like-for-like performance
+ratio.
 
 For each query:
 
 - every measured iteration for one variant must have the same row count and
   canonical hash;
-- the v1 and v2 row counts must match;
-- the v1 and v2 canonical hashes must match; and
+- the v1 and v2 row counts and canonical hashes must satisfy the query's
+  declared cross-variant expectation (`match` by default, or `different` when
+  explicitly declared); and
 - HTTP errors, truncated results, invalid JSON, or unstable output make the
   query comparison invalid.
 
@@ -283,9 +304,11 @@ For each variant, its row count and canonical hash must match the referenced
 query. An index-speedup ratio is only valid when this indexed/scalar output
 equivalence passes.
 
-Differences are reported rather than hidden. A report may describe a behavioural
-difference, but it must not present unequal or incomplete outputs as a valid
-performance comparison.
+Differences are reported rather than hidden. A declared difference is labelled
+`EXPECTED DIFFERENCE`; a new difference is labelled `UNEXPECTED DIFFERENCE`;
+and a declared difference that disappears is labelled `UNEXPECTED MATCH`.
+Unexpected behaviour fails the correctness expectations. The report must not
+present unequal or incomplete outputs as a valid performance comparison.
 
 ## Generated report
 
@@ -299,7 +322,8 @@ The final report should contain:
 - relative median performance;
 - per-variant indexed/scalar output equality and index speedup;
 - the intersects/disjoint partition check; and
-- any failures or behavioural differences.
+- any failures or behavioural differences; and
+- a final execution, correctness-expectation, and cross-variant-output summary.
 
 Raw JSON responses, canonical JSON Lines, per-iteration metrics, hashes, and the
 generated Markdown report remain under `benchmark-results/` and are not
@@ -311,7 +335,6 @@ The following are intentionally deferred:
 
 - representative Egenhofer and RCC8 relations;
 - caller-supplied DE-9IM `relate`;
-- small-region indexed/scalar comparisons;
 - feature-to-geometry join query shapes;
 - tiled large-region comparisons;
 - projected and cross-CRS fixtures;

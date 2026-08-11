@@ -48,6 +48,13 @@ case "$(basename "$query_file")" in
   sf-disjoint-cover.rq)
     bindings="[]"
     ;;
+  sf-crosses-line.rq|sf-equals-point.rq)
+    if [ "${FAKE_VARIANT:-v1}" = "v2" ]; then
+      bindings="[]"
+    else
+      bindings="[$binding_a]"
+    fi
+    ;;
   *)
     bindings="[$binding_a]"
     ;;

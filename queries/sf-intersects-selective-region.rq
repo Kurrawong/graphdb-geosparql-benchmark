@@ -1,0 +1,7 @@
+PREFIX geo: <http://www.opengis.net/ont/geosparql#>
+
+SELECT ?result ?wkt
+WHERE {
+  ?result geo:asWKT ?wkt .
+  ?result geo:sfIntersects "POLYGON((73.50 1.83, 73.55 1.83, 73.55 1.88, 73.50 1.88, 73.50 1.83))"^^geo:wktLiteral .
+}
