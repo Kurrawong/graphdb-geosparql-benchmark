@@ -1,0 +1,24 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$#" -ne 8 ] ||
+  [ "$1" != "compose" ] ||
+  [ "$2" != "--profile" ] ||
+  [ "$3" != "${FAKE_DOCKER_PROFILE:?}" ] ||
+  [ "$4" != "exec" ] ||
+  [ "$5" != "--no-TTY" ] ||
+  [ "$6" != "${FAKE_DOCKER_SERVICE:?}" ] ||
+  [ "$7" != "cat" ] ||
+  [ "$8" != "${FAKE_DOCKER_CONFIG_PATH:?}" ]; then
+  echo "Unexpected docker arguments: $*" >&2
+  exit 1
+fi
+
+: > "${FAKE_DOCKER_CALL_FILE:?}"
+
+printf '%s\n' \
+  'precision=7' \
+  'precision.current=11' \
+  'prefixtree=GEOHASH' \
+  'prefixtree.current=QUAD'

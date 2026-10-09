@@ -58,6 +58,41 @@ if [ "$original_execution_hash" != "$changed_expectation_execution_hash" ]; then
   exit 1
 fi
 
+unreadable_index_dir="$temporary_dir/unreadable-index"
+unreadable_config="$unreadable_index_dir/v3/config.properties"
+mkdir -p "$(dirname "$unreadable_config")"
+printf '%s\n' \
+  'precision.current=11' \
+  'prefixtree.current=QUAD' > "$unreadable_config"
+chmod 000 "$unreadable_config"
+
+index_metrics_results="$temporary_dir/index-metrics-results"
+container_index_dir="/opt/graphdb/home/data/repositories/maldives/storage/GeoSPARQL"
+container_config_path="$container_index_dir/v3/config.properties"
+docker_call_file="$temporary_dir/docker-called"
+PATH="$fake_path" \
+  FAKE_DOCKER_PROFILE=v2 \
+  FAKE_DOCKER_SERVICE=graphdb-geosparql-v2 \
+  FAKE_DOCKER_CONFIG_PATH="$container_config_path" \
+  FAKE_DOCKER_CALL_FILE="$docker_call_file" \
+  BENCHMARK_RESULTS_DIR="$index_metrics_results" \
+  "$repository_dir/scripts/collect-spatial-index-metrics.sh" \
+    "$unreadable_index_dir" v2 1.25 >/dev/null
+chmod 600 "$unreadable_config"
+if [ ! -f "$docker_call_file" ]; then
+  echo "Spatial index metrics were collected without reading through Docker" >&2
+  exit 1
+fi
+
+jq --exit-status '
+  .schema_version == 2 and
+  .variant == "v2" and
+  .prefix_tree == "QUAD" and
+  .precision == 11 and
+  .indexing_time_seconds == 1.25 and
+  (.index_size_bytes | type == "number" and . > 0)
+' "$index_metrics_results/v2/index-metrics.json" >/dev/null
+
 for variant in v1 v2; do
   mkdir -p "$results_dir/$variant"
   if [ "$variant" = "v1" ]; then

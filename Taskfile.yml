@@ -404,69 +404,6 @@ tasks:
         )"
 
         index_dir="{{.SPATIAL_INDEX_DIR}}"
-        if [ ! -d "$index_dir" ]; then
-          echo "GeoSPARQL index directory was not created at $index_dir" >&2
-          exit 1
-        fi
-
-        index_size="$(du --summarize --human-readable "$index_dir" | cut -f1)"
-        index_bytes="$(du --summarize --block-size=1 "$index_dir" | cut -f1)"
-
-        index_configs="$(
-          find "$index_dir" -maxdepth 2 -type f -name config.properties \
-            -print | LC_ALL=C sort
-        )"
-        index_config_count="$(
-          printf '%s\n' "$index_configs" |
-            awk 'NF { count++ } END { print count + 0 }'
-        )"
-        if [ "$index_config_count" -eq 0 ]; then
-          echo "GeoSPARQL index configuration was not found under $index_dir" >&2
-          exit 1
-        fi
-        if [ "$index_config_count" -ne 1 ]; then
-          echo "Expected one GeoSPARQL index configuration under $index_dir; found $index_config_count" >&2
-          printf '%s\n' "$index_configs" >&2
-          exit 1
-        fi
-        index_config="$index_configs"
-
-        prefix_tree="$(
-          awk -F= '$1 == "prefixtree.current" { print $2 }' "$index_config" |
-            tr -d '\r'
-        )"
-        if [ -z "$prefix_tree" ]; then
-          prefix_tree="$(
-            awk -F= '$1 == "prefixtree" { print $2 }' "$index_config" |
-              tr -d '\r'
-          )"
-        fi
-        precision="$(
-          awk -F= '$1 == "precision.current" { print $2 }' "$index_config" |
-            tr -d '\r'
-        )"
-        if [ -z "$precision" ]; then
-          precision="$(
-            awk -F= '$1 == "precision" { print $2 }' "$index_config" |
-              tr -d '\r'
-          )"
-        fi
-
-        if [ -z "$prefix_tree" ]; then
-          echo "GeoSPARQL prefix tree is missing from $index_config" >&2
-          exit 1
-        fi
-        case "$precision" in
-          ''|*[!0-9]*)
-            echo "Invalid GeoSPARQL precision in $index_config: $precision" >&2
-            exit 1
-            ;;
-        esac
-
-        echo "GeoSPARQL spatial indexing completed successfully in ${indexing_time}s"
-        echo "GeoSPARQL spatial index size: $index_size ($index_bytes bytes)"
-        echo "GeoSPARQL spatial index configuration: $prefix_tree, precision $precision"
-
         case "$index_dir" in
           "{{.V1_SPATIAL_INDEX_DIR}}")
             variant="v1"
@@ -479,27 +416,9 @@ tasks:
             exit 1
             ;;
         esac
-
-        index_metrics="benchmark-results/$variant/index-metrics.json"
-        index_metrics_part="$index_metrics.part"
-        mkdir -p "benchmark-results/$variant"
-        trap 'rm -f "$index_metrics_part"' EXIT
-        jq --null-input \
-          --arg variant "$variant" \
-          --arg prefix_tree "$prefix_tree" \
-          --argjson precision "$precision" \
-          --argjson indexing_time_seconds "$indexing_time" \
-          --argjson index_size_bytes "$index_bytes" \
-          '{
-            schema_version: 2,
-            variant: $variant,
-            prefix_tree: $prefix_tree,
-            precision: $precision,
-            indexing_time_seconds: $indexing_time_seconds,
-            index_size_bytes: $index_size_bytes
-          }' > "$index_metrics_part"
-        mv "$index_metrics_part" "$index_metrics"
-        echo "Saved spatial index metrics to $index_metrics"
+        BENCHMARK_REPOSITORY_ID="{{.REPOSITORY_ID}}" \
+          scripts/collect-spatial-index-metrics.sh \
+          "$index_dir" "$variant" "$indexing_time"
 
   delete-repository:
     internal: true
