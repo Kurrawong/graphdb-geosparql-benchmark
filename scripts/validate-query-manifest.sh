@@ -6,12 +6,12 @@ manifest="${1:-queries/manifest.json}"
 queries_dir="${2:-queries}"
 
 jq --exit-status '
+  (.queries | map(.id)) as $query_ids |
   .schema_version == 1 and
   .canonical_variables == ["result", "wkt"] and
   (.queries | type == "array" and length > 0) and
   ([.queries[].id] | length == (unique | length)) and
   ([.queries[].file] | length == (unique | length)) and
-  (.queries | map(.id)) as $query_ids |
   all(
     .queries[];
     .id as $query_id |
