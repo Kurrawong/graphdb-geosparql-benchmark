@@ -1,0 +1,12 @@
+ARG GRAPHDB_IMAGE
+FROM ${GRAPHDB_IMAGE}
+
+USER root
+
+RUN rm -rf \
+    /opt/graphdb/dist/lib/plugins/geosparql-plugin \
+    /opt/graphdb/dist/lib/plugins/graphdb-geosparql-plugin
+
+COPY geosparql-plugin /opt/graphdb/dist/lib/plugins/geosparql-plugin
+COPY source-commit.txt /opt/graphdb/geosparql-v2-source-commit.txt
+COPY source.json /opt/graphdb/geosparql-v2-source.json

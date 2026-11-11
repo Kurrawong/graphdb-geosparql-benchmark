@@ -11,6 +11,21 @@ variant="$1"
 graphdb_url="$2"
 repository_id="$3"
 plugin_revision="$4"
+graphdb_version="${BENCHMARK_GRAPHDB_VERSION:-11.4.0}"
+plugin_source=null
+runtime=null
+if [ -n "${BENCHMARK_PLUGIN_METADATA:-}" ]; then
+  plugin_source="$(jq --compact-output --exit-status '
+    select((.source_commit | type == "string") and (.dirty | type == "boolean")
+      and (.archive_sha256 | test("^[0-9a-f]{64}$")))
+  ' "$BENCHMARK_PLUGIN_METADATA")"
+fi
+if [ -n "${BENCHMARK_RUNTIME_METADATA:-}" ]; then
+  runtime="$(jq --compact-output --exit-status '
+    select((.runtime_image_id | type == "string" and length > 0)
+      and (.java | type == "string" and length > 0))
+  ' "$BENCHMARK_RUNTIME_METADATA")"
+fi
 
 case "$variant" in
   v1|v2)
@@ -178,6 +193,9 @@ for query_id in $query_ids; do
       --arg query_id "$query_id" \
       --arg variant "$variant" \
       --arg plugin_revision "$plugin_revision" \
+      --arg graphdb_version "$graphdb_version" \
+      --argjson plugin_source "$plugin_source" \
+      --argjson runtime "$runtime" \
       --argjson iteration "$iteration" \
       --argjson http_status "$http_status" \
       --argjson response_time_seconds "$response_time" \
@@ -187,8 +205,10 @@ for query_id in $query_ids; do
         schema_version: 1,
         query_id: $query_id,
         variant: $variant,
-        graphdb_version: "11.4.0",
+        graphdb_version: $graphdb_version,
         plugin_revision: $plugin_revision,
+        plugin_source: $plugin_source,
+        runtime: $runtime,
         iteration: $iteration,
         http_status: $http_status,
         response_time_seconds: $response_time_seconds,
@@ -218,6 +238,9 @@ for query_id in $query_ids; do
     --arg query_id "$query_id" \
     --arg variant "$variant" \
     --arg plugin_revision "$plugin_revision" \
+    --arg graphdb_version "$graphdb_version" \
+    --argjson plugin_source "$plugin_source" \
+    --argjson runtime "$runtime" \
     --argjson warmups "$warmups" \
     '
       def median:
@@ -238,8 +261,10 @@ for query_id in $query_ids; do
         schema_version: 1,
         query_id: $query_id,
         variant: $variant,
-        graphdb_version: "11.4.0",
+        graphdb_version: $graphdb_version,
         plugin_revision: $plugin_revision,
+        plugin_source: $plugin_source,
+        runtime: $runtime,
         warmups: $warmups,
         measured_runs: ($runs | length),
         response_times_seconds: $times,
@@ -325,14 +350,19 @@ if [ -z "$selected_query" ]; then
   jq --slurp \
     --arg variant "$variant" \
     --arg plugin_revision "$plugin_revision" \
+    --arg graphdb_version "$graphdb_version" \
+    --argjson plugin_source "$plugin_source" \
+    --argjson runtime "$runtime" \
     --arg benchmark_definition_sha256 "$benchmark_definition_hash" \
     --argjson warmups "$warmups" \
     --argjson measured_runs "$runs" \
     '{
       schema_version: 2,
       variant: $variant,
-      graphdb_version: "11.4.0",
+      graphdb_version: $graphdb_version,
       plugin_revision: $plugin_revision,
+      plugin_source: $plugin_source,
+      runtime: $runtime,
       benchmark_definition_sha256: $benchmark_definition_sha256,
       warmups: $warmups,
       measured_runs: $measured_runs,

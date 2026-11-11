@@ -99,6 +99,10 @@ task v2:build
 
 ## Run a complete comparison
 
+For comparisons between two builds of the Jena-backed plugin, use the local
+workflow below. The original v1/v2 workflow compares the bundled implementation
+with the replacement plugin and retains its declared semantic differences.
+
 Configure the license for both variants before beginning. Then run these
 commands in order:
 
@@ -143,6 +147,86 @@ The repetition counts are configurable, but must be identical for v1 and v2:
 ```sh
 BENCHMARK_WARMUPS=1 BENCHMARK_RUNS=5 task benchmark:all
 ```
+
+## Benchmark a local plugin working tree
+
+The local workflow builds the plugin from its working tree, including
+uncommitted edits and new source files. Neither repository needs to be committed
+or pushed. Maven may still download dependencies from its configured repositories.
+
+In addition to the prerequisites above, install Maven and the JDK required by
+the plugin checkout, including `jar` on `PATH`. Current plugin master targets
+Java 25 and the GraphDB 12 SDK. Configure authorized Maven access for any restricted
+SDK dependencies, and select a GraphDB runtime image that supports the resulting
+plugin and Java bytecode. SDK version strings do not necessarily name published
+Docker images.
+
+From this benchmark checkout, configure the runtime and build tools. Replace
+the example image and license paths with your available inputs:
+
+```sh
+export JAVA_HOME="$HOME/.jdks/openjdk-25.0.1"
+export PATH="$JAVA_HOME/bin:$PATH"
+export GRAPHDB_IMAGE=your-registry/graphdb:12-java25
+export BENCHMARK_GRAPHDB_VERSION=12.0.0
+export GRAPHDB_LICENSE_FILE=/path/to/graphdb.license
+export BENCHMARK_WARMUPS=2
+export BENCHMARK_RUNS=5
+```
+
+`GRAPHDB_IMAGE` and `BENCHMARK_GRAPHDB_VERSION` are required for local runs. The
+version must identify the GraphDB distribution in that image. The workflow also
+records the actual runtime image ID, plugin image ID and `java -version` output.
+`GRAPHDB_LICENSE_FILE` is optional when the selected runtime supplies its license
+or does not require one. When supplied, the file is copied into the run's GraphDB
+home without displaying its contents.
+
+First use an unchanged plugin checkout for the baseline:
+
+```sh
+task benchmark:local \
+  PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=master-baseline
+```
+
+After making local plugin changes, run the same command with a new name:
+
+```sh
+task benchmark:local \
+  PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=envelope-filter
+
+task benchmark:compare-local \
+  BASELINE=benchmark-results/local/master-baseline \
+  CANDIDATE=benchmark-results/local/envelope-filter
+```
+
+Each run builds one plugin ZIP and one container image, creates a separate
+GraphDB home, and imports and indexes a fresh repository. It saves results under
+`benchmark-results/local/RUN_NAME/v2/`, then stops its container on success or
+failure. Existing run names are rejected to preserve the baseline, including
+partial runs. Use a new name when retrying a failed run. The original migration
+results under `benchmark-results/v1` and `benchmark-results/v2` are preserved.
+
+Plugin archives, source metadata and GraphDB homes live under the ignored
+`.local-benchmarks/` directory. `BENCHMARK_LOCAL_DIR` can relocate these files;
+`BENCHMARK_RESULTS_DIR` can relocate the parent directory containing named local
+results. Each result records the source commit, dirty status, ZIP SHA-256 and
+build-tool versions. A ZIP checksum identifies the built artifact, including
+changes not represented by the commit alone. Maven runs `clean package` with
+tests skipped; run the plugin's relevant correctness tests separately.
+
+The local comparison requires identical canonical output for **every** query.
+Migration exceptions for crossing and equality do not apply. It also rejects
+different GraphDB versions, runtime image IDs, Java runtimes, prefix trees,
+precisions, repetition counts, query definitions or geometry corpora. The report
+is saved as `CANDIDATE/comparison.md` and labels the builds baseline/candidate.
+
+Both workflows use localhost port 7200 by default; stop other services using
+that port before running. Set `GRAPHDB_PORT` to use another local port for a
+local run. Local tasks do not stop containers belonging to the migration workflow.
+
+## Migration report validation
 
 `task benchmark:report` refuses incomplete, stale, or differently configured
 suites. Staleness is detected from a fingerprint covering the manifest, every

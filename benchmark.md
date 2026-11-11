@@ -26,6 +26,24 @@ Controlled fixtures for projected coordinate systems, geometry collections,
 Egenhofer, RCC8, DE-9IM, and incremental updates are outside the primary suite
 and will be considered separately.
 
+## Comparing local builds
+
+`task benchmark:local` runs the same query and corpus protocol against a plugin
+built from a local working tree. Named runs have separate GraphDB homes and
+result directories. The source commit, dirty status, built ZIP checksum,
+build-tool versions, runtime image IDs and runtime Java version are recorded.
+The runtime image and GraphDB version are explicit inputs, allowing a compatible
+host for the plugin checkout without changing the migration defaults.
+
+`task benchmark:compare-local` compares two named runs under an `identical`
+output contract: every query must match, including queries with declared
+migration differences. Both runs must use the same runtime image ID, Java
+runtime, GraphDB version, index settings, query definitions and repetition counts.
+The existing corpus, indexed/scalar equivalence and intersects/disjoint partition
+checks also apply. Use an unchanged checkout as the baseline before changing the
+plugin; retain it when running the modified working tree. See the local workflow
+in [README.md](README.md#benchmark-a-local-plugin-working-tree) for commands.
+
 ## Controlled environment
 
 Only one GraphDB variant runs at a time. Both variants use:

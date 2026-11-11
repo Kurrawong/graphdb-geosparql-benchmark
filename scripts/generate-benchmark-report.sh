@@ -7,18 +7,38 @@ results_root="${2:-benchmark-results}"
 report_file="${3:-$results_root/report.md}"
 script_dir="$(dirname "$0")"
 queries_dir="$(dirname "$manifest")"
+comparison="${BENCHMARK_COMPARISON:-migration}"
+case "$comparison" in
+  migration) baseline_label=v1; candidate_label=v2 ;;
+  identical) baseline_label=baseline; candidate_label=candidate ;;
+  *) echo "BENCHMARK_COMPARISON must be migration or identical" >&2; exit 1 ;;
+esac
+baseline_dir="${BENCHMARK_BASELINE_RESULTS:-$results_root/v1}"
+candidate_dir="${BENCHMARK_CANDIDATE_RESULTS:-$results_root/v2}"
+variant_results_dir() {
+  case "$1" in
+    v1) printf '%s\n' "$baseline_dir" ;;
+    v2) printf '%s\n' "$candidate_dir" ;;
+  esac
+}
+variant_label() {
+  case "$1" in
+    v1) printf '%s\n' "$baseline_label" ;;
+    v2) printf '%s\n' "$candidate_label" ;;
+  esac
+}
 
 "$script_dir/validate-query-manifest.sh" "$manifest" "$queries_dir"
 
 benchmark_definition_hash="$(
   "$script_dir/benchmark-definition-sha256.sh" "$manifest" "$queries_dir"
 )"
-v1_suite="$results_root/v1/suite.json"
-v2_suite="$results_root/v2/suite.json"
-v1_index="$results_root/v1/index-metrics.json"
-v2_index="$results_root/v2/index-metrics.json"
-v1_corpus_summary="$results_root/v1/corpus/summary.json"
-v2_corpus_summary="$results_root/v2/corpus/summary.json"
+v1_suite="$baseline_dir/suite.json"
+v2_suite="$candidate_dir/suite.json"
+v1_index="$baseline_dir/index-metrics.json"
+v2_index="$candidate_dir/index-metrics.json"
+v1_corpus_summary="$baseline_dir/corpus/summary.json"
+v2_corpus_summary="$candidate_dir/corpus/summary.json"
 
 for required_file in \
   "$v1_suite" "$v2_suite" \
@@ -37,7 +57,7 @@ for suite_file in "$v1_suite" "$v2_suite"; do
     --argjson expected_queries "$expected_queries" \
     '
       .schema_version == 2 and
-      .graphdb_version == "11.4.0" and
+      (.graphdb_version | type == "string" and length > 0) and
       .benchmark_definition_sha256 == $benchmark_definition_sha256 and
       (.warmups | type == "number") and
       (.measured_runs | type == "number" and . > 0) and
@@ -62,6 +82,34 @@ for corpus_summary in "$v1_corpus_summary" "$v2_corpus_summary"; do
     (.canonical_sha256 | type == "string" and length == 64)
   ' "$corpus_summary" >/dev/null
 done
+
+graphdb_version="$(jq --raw-output '.graphdb_version' "$v1_suite")"
+if [ "$graphdb_version" != "$(jq --raw-output '.graphdb_version' "$v2_suite")" ]; then
+  echo "Cannot compare different GraphDB versions" >&2
+  exit 1
+fi
+if [ "$comparison" = identical ]; then
+  for suite_file in "$v1_suite" "$v2_suite"; do
+    jq --exit-status '
+      (.runtime.runtime_image_id | type == "string" and length > 0) and
+      (.runtime.java | type == "string" and length > 0) and
+      (.plugin_source.source_commit | type == "string" and length > 0) and
+      (.plugin_source.dirty | type == "boolean") and
+      (.plugin_source.archive_sha256 | test("^[0-9a-f]{64}$"))
+    ' "$suite_file" >/dev/null
+  done
+  baseline_runtime="$(jq --compact-output '.runtime | {runtime_image_id, java}' "$v1_suite")"
+  candidate_runtime="$(jq --compact-output '.runtime | {runtime_image_id, java}' "$v2_suite")"
+  if [ "$baseline_runtime" != "$candidate_runtime" ]; then
+    echo "Cannot compare local builds with different GraphDB images or Java runtimes" >&2
+    exit 1
+  fi
+fi
+if [ "$(jq -c '[.prefix_tree, .precision]' "$v1_index")" != \
+     "$(jq -c '[.prefix_tree, .precision]' "$v2_index")" ]; then
+  echo "Cannot compare different prefix trees or index precisions" >&2
+  exit 1
+fi
 
 v1_warmups="$(jq '.warmups' "$v1_suite")"
 v2_warmups="$(jq '.warmups' "$v2_suite")"
@@ -88,8 +136,8 @@ rows_file="$temporary_dir/query-rows.md"
 : > "$rows_file"
 
 for query_id in $(jq --raw-output '.queries[].id' "$manifest"); do
-  v1_summary="$results_root/v1/queries/$query_id/summary.json"
-  v2_summary="$results_root/v2/queries/$query_id/summary.json"
+  v1_summary="$baseline_dir/queries/$query_id/summary.json"
+  v2_summary="$candidate_dir/queries/$query_id/summary.json"
   for summary_file in "$v1_summary" "$v2_summary"; do
     if [ ! -f "$summary_file" ]; then
       echo "Missing query summary: $summary_file" >&2
@@ -124,6 +172,10 @@ for query_id in $(jq --raw-output '.queries[].id' "$manifest"); do
       (.cross_variant_output // "match")
     ' "$manifest"
   )"
+
+  if [ "$comparison" = identical ]; then
+    expected_output=match
+  fi
 
   if [ "$v1_rows" = "$v2_rows" ] && [ "$v1_hash" = "$v2_hash" ]; then
     speed_ratio="$(
@@ -174,8 +226,8 @@ jq --raw-output '
 tab="$(printf '\t')"
 while IFS="$tab" read -r scalar_query indexed_query; do
   for variant in v1 v2; do
-    scalar_summary="$results_root/$variant/queries/$scalar_query/summary.json"
-    indexed_summary="$results_root/$variant/queries/$indexed_query/summary.json"
+    scalar_summary="$(variant_results_dir "$variant")/queries/$scalar_query/summary.json"
+    indexed_summary="$(variant_results_dir "$variant")/queries/$indexed_query/summary.json"
     scalar_rows="$(jq --raw-output '.row_count' "$scalar_summary")"
     indexed_rows="$(jq --raw-output '.row_count' "$indexed_summary")"
     scalar_hash="$(jq --raw-output '.canonical_sha256' "$scalar_summary")"
@@ -199,7 +251,7 @@ while IFS="$tab" read -r scalar_query indexed_query; do
     fi
 
     printf '| %s | `%s` | `%s` | %s | %s | %s | %s |\n' \
-      "$variant" \
+      "$(variant_label "$variant")" \
       "$indexed_query" \
       "$scalar_query" \
       "$indexed_median" \
@@ -211,9 +263,9 @@ done < "$equivalence_pairs_file"
 
 partition_statuses=""
 for variant in v1 v2; do
-  intersects="$results_root/$variant/queries/sf-intersects-region/run-1/results.canonical.jsonl"
-  disjoint="$results_root/$variant/queries/sf-disjoint-region/run-1/results.canonical.jsonl"
-  corpus="$results_root/$variant/corpus/results.canonical.jsonl"
+  intersects="$(variant_results_dir "$variant")/queries/sf-intersects-region/run-1/results.canonical.jsonl"
+  disjoint="$(variant_results_dir "$variant")/queries/sf-disjoint-region/run-1/results.canonical.jsonl"
+  corpus="$(variant_results_dir "$variant")/corpus/results.canonical.jsonl"
   for partition_file in "$intersects" "$disjoint" "$corpus"; do
     if [ ! -f "$partition_file" ]; then
       echo "Missing partition artifact: $partition_file" >&2
@@ -232,7 +284,7 @@ for variant in v1 v2; do
     partition_status="FAIL"
     correctness_valid=false
   fi
-  partition_statuses="$partition_statuses $variant=$partition_status"
+  partition_statuses="$partition_statuses $(variant_label "$variant")=$partition_status"
 done
 
 v1_corpus_rows="$(jq --raw-output '.row_count' "$v1_corpus_summary")"
@@ -262,7 +314,9 @@ mkdir -p "$(dirname "$report_file")"
 {
   echo "# GeoSPARQL benchmark report"
   echo
-  echo "GraphDB: 11.4.0"
+  echo "GraphDB: $graphdb_version"
+  echo
+  echo "Comparison: $comparison"
   echo
   echo "Warm-up executions per query: $v1_warmups"
   echo
@@ -270,17 +324,34 @@ mkdir -p "$(dirname "$report_file")"
   echo
   echo "| Variant | Plugin revision | Prefix tree | Precision | Index build (s) | Index size (bytes) |"
   echo "| --- | --- | --- | ---: | ---: | ---: |"
-  echo "| v1 | \`$v1_revision\` | $v1_prefix_tree | $v1_precision | $v1_index_time | $v1_index_size |"
-  echo "| v2 | \`$v2_revision\` | $v2_prefix_tree | $v2_precision | $v2_index_time | $v2_index_size |"
+  echo "| $baseline_label | \`$v1_revision\` | $v1_prefix_tree | $v1_precision | $v1_index_time | $v1_index_size |"
+  echo "| $candidate_label | \`$v2_revision\` | $v2_prefix_tree | $v2_precision | $v2_index_time | $v2_index_size |"
   echo
   echo "## Query results"
   echo
   echo "Times are median seconds with the measured minimum–maximum in parentheses."
-  echo "The ratio is v1 median divided by v2 median; values above 1 favour v2."
-  echo "Output expectations default to matching; declared behavioural differences are labelled EXPECTED DIFFERENCE."
+  echo "The ratio is $baseline_label median divided by $candidate_label median; values above 1 favour $candidate_label."
+  if [ "$comparison" = identical ]; then
+    echo "Every query must return identical canonical output; migration exceptions do not apply."
+    echo
+    echo "Runtime image: $(jq --raw-output '.runtime.runtime_image_id' "$v1_suite")"
+    echo
+    echo "| Build | Source commit | Dirty | Plugin ZIP SHA-256 |"
+    echo "| --- | --- | --- | --- |"
+    for variant in v1 v2; do
+      suite="$(variant_results_dir "$variant")/suite.json"
+      printf '| %s | `%s` | %s | `%s` |\n' "$(variant_label "$variant")" \
+        "$(jq -r '.plugin_source.source_commit' "$suite")" \
+        "$(jq -r '.plugin_source.dirty' "$suite")" \
+        "$(jq -r '.plugin_source.archive_sha256' "$suite")"
+    done
+    echo
+  else
+    echo "Output expectations default to matching; declared behavioural differences are labelled EXPECTED DIFFERENCE."
+  fi
   echo "UNEXPECTED DIFFERENCE and UNEXPECTED MATCH both fail the correctness expectations."
   echo
-  echo "| Query | v1 median (range) | v2 median (range) | v1/v2 | Rows v1/v2 | Output |"
+  echo "| Query | $baseline_label median (range) | $candidate_label median (range) | $baseline_label/$candidate_label | Rows $baseline_label/$candidate_label | Output |"
   echo "| --- | ---: | ---: | ---: | ---: | --- |"
   cat "$rows_file"
   echo
@@ -301,7 +372,7 @@ mkdir -p "$(dirname "$report_file")"
     partition_status="${partition_entry#*=}"
     echo "- $partition_variant intersects/disjoint partition: **$partition_status**"
   done
-  echo "- v1/v2 canonical geometry corpus: **$corpus_status** ($v1_corpus_rows / $v2_corpus_rows rows)"
+  echo "- $baseline_label/$candidate_label canonical geometry corpus: **$corpus_status** ($v1_corpus_rows / $v2_corpus_rows rows)"
   echo
   echo "Benchmark execution: **COMPLETE**"
   if [ "$correctness_valid" = true ]; then
