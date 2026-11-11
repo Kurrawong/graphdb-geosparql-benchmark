@@ -82,10 +82,7 @@ jq --null-input --arg image "$GRAPHDB_IMAGE" --arg image_id "$image_id" \
   > "$BENCHMARK_RUNTIME_METADATA"
 
 task download-data
-task initialise GRAPHDB_URL="$graphdb_url"
-task remove-geometry-collection-wkts GRAPHDB_URL="$graphdb_url"
-task enable-spatial-index GRAPHDB_URL="$graphdb_url" \
-  SPATIAL_INDEX_DIR="$index_dir" V2_SPATIAL_INDEX_DIR="$index_dir"
+task benchmark:initialise-local GRAPHDB_URL="$graphdb_url" SPATIAL_INDEX_DIR="$index_dir"
 revision="$(cat "$build_dir/source-commit.txt")"
 scripts/run-benchmark-suite.sh v2 "$graphdb_url" maldives "$revision"
 echo "Saved local benchmark to $run_dir/v2"

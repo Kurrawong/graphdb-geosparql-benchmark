@@ -12,6 +12,23 @@ vars:
   V2_REPOSITORY: https://github.com/Kurrawong/graphdb-geosparql-plugin.git
 
 tasks:
+  benchmark:initialise-local:
+    desc: Import and index a fresh local benchmark repository
+    requires:
+      vars: [GRAPHDB_URL, SPATIAL_INDEX_DIR]
+    cmds:
+      - task: initialise
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-geometry-collection-wkts
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: enable-spatial-index
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+          SPATIAL_INDEX_DIR: "{{.SPATIAL_INDEX_DIR}}"
+          V2_SPATIAL_INDEX_DIR: "{{.SPATIAL_INDEX_DIR}}"
+
   benchmark:local:
     desc: Build and benchmark a local plugin working tree in an isolated run
     requires:

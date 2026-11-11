@@ -5,6 +5,13 @@ set -eu
 repository_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf -- "$temporary_dir"' EXIT HUP INT TERM
+real_task="$(command -v task)"
+(cd "$repository_dir" && "$real_task" --dry benchmark:initialise-local \
+  GRAPHDB_URL=http://graphdb.invalid SPATIAL_INDEX_DIR=/tmp/index) \
+  > "$temporary_dir/task-plan.log" 2>&1
+grep -Fq 'initialise' "$temporary_dir/task-plan.log"
+grep -Fq 'remove-geometry-collection-wkts' "$temporary_dir/task-plan.log"
+grep -Fq 'enable-spatial-index' "$temporary_dir/task-plan.log"
 fixture="$temporary_dir/plugin checkout"
 fake_bin="$temporary_dir/bin"
 mkdir -p "$fixture" "$fake_bin"
@@ -86,8 +93,8 @@ cat > "$fake_bin/task" <<'SH'
 set -eu
 printf 'task %s\n' "$*" >> "$LOCAL_CALLS_FILE"
 case "$1" in
-  download-data|initialise|remove-geometry-collection-wkts) ;;
-  enable-spatial-index)
+  download-data) ;;
+  benchmark:initialise-local)
     mkdir -p "$BENCHMARK_RESULTS_DIR/v2"
     printf '%s\n' '{"schema_version":2,"variant":"v2","prefix_tree":"QUAD","precision":11,"indexing_time_seconds":1,"index_size_bytes":1000}' \
       > "$BENCHMARK_RESULTS_DIR/v2/index-metrics.json"
@@ -128,7 +135,7 @@ if BENCHMARK_RESULTS_DIR="$temporary_dir/another-results" \
   exit 1
 fi
 test "$calls_hash" = "$(sha256sum "$LOCAL_CALLS_FILE" | awk '{print $1}')"
-if FAKE_TASK_FAIL=initialise "$repository_dir/scripts/run-local-benchmark.sh" \
+if FAKE_TASK_FAIL=benchmark:initialise-local "$repository_dir/scripts/run-local-benchmark.sh" \
   "$fixture" failed >/dev/null 2>&1; then
   echo "A failed initialization was accepted" >&2
   exit 1
