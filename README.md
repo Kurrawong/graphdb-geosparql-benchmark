@@ -16,6 +16,7 @@ measurement protocol, and output-validation rules.
 - `bzip2`
 - `git`
 - `jq`
+- Python 3.9 or newer for synthetic datasets
 
 The GraphDB containers are configured with a 10 GB maximum JVM heap. Ensure
 Docker has enough memory available.
@@ -96,6 +97,75 @@ The regular cached image build is also available separately:
 ```sh
 task v2:build
 ```
+
+## Synthetic datasets
+
+Generate a reproducible workload with points, lines and four polygon forms
+(rectangular, concave, holed and 64-vertex). Sources are split approximately
+equally between points, lines and polygons. Choose `native` (CRS84), `projected`
+(EPSG:3857), or `mixed`, with `uniform` or `clustered` placement:
+
+```sh
+python3 scripts/generate-synthetic-dataset.py \
+  .local-benchmarks/datasets/mixed-uniform-100k \
+  --profile mixed --distribution uniform --count 100000 --seed 40
+
+BENCHMARK_DATASET_DIR="$PWD/.local-benchmarks/datasets/mixed-uniform-100k" \
+  task benchmark:local PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=mixed-uniform-baseline
+```
+
+Supply the compatible runtime, license and build environment described under
+the local workflow below. The dataset switch does not change plugin build
+dependencies; use the established GraphDB 11 SDK/compiler overrides when
+building a checkout whose default dependency targets GraphDB 12.
+
+Projected and mixed profiles require external Apache SIS EPSG reference data.
+Set `GRAPHDB_SIS_DATA=/opt/graphdb/sis-data` and `GRAPHDB_SIS_DIR` to the host
+directory containing `Databases/SpatialMetadata`. For a writable Derby database,
+use a dedicated copy for each process with `GRAPHDB_SIS_MODE=rw`. The default
+mount is read-only and is suitable only for CRS data prepared for read-only use.
+Record the EPSG data version with comparisons. These settings configure the
+runtime; they do not add reference data or dependencies to the plugin package.
+
+The generator refuses existing output directories. It records the seed,
+geometry/CRS counts, generator checksum, and hashes of the data, repository
+configuration and queries in `dataset.json`. All profiles use a square spanning
+10,000 EPSG:3857 map units near 20 E, 60 N. Fixture generation uses spherical Mercator formulas outside
+the timed interval. Cross-CRS equivalence of straight polygon edges is not
+assumed.
+
+Every indexed query has a scalar counterpart using the same source geometry
+literals and argument order. The scalar path bypasses Lucene; in the Jena-backed
+plugin it provides the exact-evaluation reference. Queries include broad and
+selective bounds, rectangular covers, concave interiors, holes, a bound above
+the certified-rectangle coordinate limit, and reversed binding direction. Mixed
+data additionally uses both CRS84 and projected bounds. Concave-bound names
+describe shape dimensions; they do not promise particular pruning percentages.
+
+The local runner records the dataset metadata and checks all indexed/scalar
+result hashes, known zero/full results, and corpus size. Recheck a saved run:
+
+```sh
+python3 scripts/validate-synthetic-results.py \
+  .local-benchmarks/datasets/mixed-uniform-100k \
+  benchmark-results/local/mixed-uniform-baseline/v2
+
+BENCHMARK_MANIFEST="$PWD/.local-benchmarks/datasets/mixed-uniform-100k/queries/manifest.json" \
+  task benchmark:compare-local BASELINE=benchmark-results/local/mixed-uniform-baseline \
+  CANDIDATE=benchmark-results/local/mixed-uniform-candidate
+
+python3 tests/test-synthetic-datasets.py
+```
+
+Start with a small dataset (for example `--count 1200`) before timing 100,000
+geometries. Compare the same generated dataset, query definitions, runtime,
+index settings and measurement protocol across builds. Baseline output
+differences must be reported as correctness differences; timings for different
+outputs are not like-for-like speedups. Synthetic coverage supplements the
+Maldives real-world workload. It does not establish universal CRS correctness,
+and this suite does not cover collections, empty sources, polar/wraparound
+geometry, or projected CRSs other than EPSG:3857.
 
 ## Run a complete comparison
 

@@ -24,6 +24,18 @@ fi
 
 repository_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$repository_dir"
+repository_id=maldives
+dataset_dir=""
+if [ -n "${BENCHMARK_DATASET_DIR:-}" ]; then
+  dataset_dir="$(CDPATH= cd -- "$BENCHMARK_DATASET_DIR" && pwd)"
+  repository_id="$(jq --exit-status --raw-output '
+    select(.schema_version == 1 and .repository_id == "synthetic") | .repository_id
+  ' "$dataset_dir/dataset.json")"
+  export BENCHMARK_DATASET_METADATA="$dataset_dir/dataset.json"
+  export BENCHMARK_MANIFEST="$dataset_dir/queries/manifest.json"
+  export BENCHMARK_QUERIES_DIR="$dataset_dir/queries"
+  "$repository_dir/scripts/validate-query-manifest.sh" "$BENCHMARK_MANIFEST" "$BENCHMARK_QUERIES_DIR"
+fi
 results_root="${BENCHMARK_RESULTS_DIR:-$repository_dir/benchmark-results/local}"
 mkdir -p "$results_root"
 results_root="$(CDPATH= cd -- "$results_root" && pwd)"
@@ -44,7 +56,7 @@ export GRAPHDB_V2_HOME="$local_root/homes/$run_name"
 export COMPOSE_PROJECT_NAME="geosparql-local-$run_name"
 export BENCHMARK_RESULTS_DIR="$run_dir"
 graphdb_url="http://localhost:${GRAPHDB_PORT:-7200}"
-index_dir="$GRAPHDB_V2_HOME/data/repositories/maldives/storage/GeoSPARQL"
+index_dir="$GRAPHDB_V2_HOME/data/repositories/$repository_id/storage/GeoSPARQL"
 if [ -e "$GRAPHDB_V2_HOME" ]; then
   echo "GraphDB home already exists at $GRAPHDB_V2_HOME; choose a new RUN_NAME" >&2
   exit 1
@@ -81,8 +93,18 @@ jq --null-input --arg image "$GRAPHDB_IMAGE" --arg image_id "$image_id" \
   '{image: $image, runtime_image_id: $runtime_image_id, image_id: $image_id, java: $java}' \
   > "$BENCHMARK_RUNTIME_METADATA"
 
-task download-data
-task benchmark:initialise-local GRAPHDB_URL="$graphdb_url" SPATIAL_INDEX_DIR="$index_dir"
+if [ -n "$dataset_dir" ]; then
+  task benchmark:initialise-local GRAPHDB_URL="$graphdb_url" SPATIAL_INDEX_DIR="$index_dir" \
+    REPOSITORY_ID="$repository_id" REPOSITORY_CONFIG="$dataset_dir/repository-config.ttl" \
+    DATA_DIR="$dataset_dir" DATA_FILE=data.ttl
+else
+  task download-data
+  task benchmark:initialise-local GRAPHDB_URL="$graphdb_url" SPATIAL_INDEX_DIR="$index_dir"
+fi
 revision="$(cat "$build_dir/source-commit.txt")"
-scripts/run-benchmark-suite.sh v2 "$graphdb_url" maldives "$revision"
+scripts/run-benchmark-suite.sh v2 "$graphdb_url" "$repository_id" "$revision"
+if [ -n "$dataset_dir" ]; then
+  python3 scripts/validate-synthetic-results.py "$dataset_dir" "$run_dir/v2" \
+    > "$run_dir/synthetic-validation.json"
+fi
 echo "Saved local benchmark to $run_dir/v2"

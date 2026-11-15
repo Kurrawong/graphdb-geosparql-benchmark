@@ -16,7 +16,7 @@ services:
         -Dentity-pool-implementation=transactional
     volumes:
       - ./graphdb-home-geosparql-v1:/opt/graphdb/home
-      - ./sis-data:/opt/graphdb/sis-data:ro
+      - ${GRAPHDB_SIS_DIR:-./sis-data}:/opt/graphdb/sis-data:${GRAPHDB_SIS_MODE:-ro}
     restart: unless-stopped
 
   graphdb-geosparql-v2:
@@ -43,5 +43,5 @@ services:
         -Dentity-pool-implementation=transactional
     volumes:
       - ${GRAPHDB_V2_HOME:-./graphdb-home-geosparql-v2}:/opt/graphdb/home
-      - ./sis-data:/opt/graphdb/sis-data:ro
+      - ${GRAPHDB_SIS_DIR:-./sis-data}:/opt/graphdb/sis-data:${GRAPHDB_SIS_MODE:-ro}
     restart: unless-stopped

@@ -14,6 +14,12 @@ plugin_revision="$4"
 graphdb_version="${BENCHMARK_GRAPHDB_VERSION:-11.4.0}"
 plugin_source=null
 runtime=null
+dataset=null
+if [ -n "${BENCHMARK_DATASET_METADATA:-}" ]; then
+  dataset="$(jq --compact-output --exit-status '
+    select(.schema_version == 1 and (.files_sha256 | type == "object"))
+  ' "$BENCHMARK_DATASET_METADATA")"
+fi
 if [ -n "${BENCHMARK_PLUGIN_METADATA:-}" ]; then
   plugin_source="$(jq --compact-output --exit-status '
     select((.source_commit | type == "string") and (.dirty | type == "boolean")
@@ -354,6 +360,7 @@ if [ -z "$selected_query" ]; then
     --argjson plugin_source "$plugin_source" \
     --argjson runtime "$runtime" \
     --arg benchmark_definition_sha256 "$benchmark_definition_hash" \
+    --argjson dataset "$dataset" \
     --argjson warmups "$warmups" \
     --argjson measured_runs "$runs" \
     '{
@@ -363,6 +370,7 @@ if [ -z "$selected_query" ]; then
       plugin_revision: $plugin_revision,
       plugin_source: $plugin_source,
       runtime: $runtime,
+      dataset: $dataset,
       benchmark_definition_sha256: $benchmark_definition_sha256,
       warmups: $warmups,
       measured_runs: $measured_runs,

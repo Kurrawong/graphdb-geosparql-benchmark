@@ -22,9 +22,16 @@ The comparison covers:
 The primary suite uses the Maldives OSM dataset and tests the public
 index-backed `geo:` property relations. It includes targeted scalar `geof:`
 baselines for measuring index effectiveness at two selectivity levels.
-Controlled fixtures for projected coordinate systems, geometry collections,
-Egenhofer, RCC8, DE-9IM, and incremental updates are outside the primary suite
-and will be considered separately.
+The optional synthetic suite adds controlled CRS84, EPSG:3857 and mixed-CRS
+workloads with balanced geometry types and uniform or clustered placement.
+Every indexed query is paired with a scalar reference, and construction gives
+known empty/full results for cover and outside bounds. Generated data, queries,
+configuration, source counts and checksums are recorded together. It is a
+separate workload, not a replacement for the Maldives comparison. See the
+synthetic dataset commands in README.md.
+
+Geometry collections, Egenhofer, RCC8, DE-9IM, and incremental updates remain
+outside these performance suites.
 
 ## Comparing local builds
 

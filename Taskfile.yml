@@ -6,6 +6,7 @@ vars:
   DATA_ARCHIVE: mdv.osm.ttl.bz2
   DATA_URL: https://osm2rdf.cs.uni-freiburg.de/ttl/mdv.osm.ttl.bz2
   REPOSITORY_ID: maldives
+  REPOSITORY_CONFIG: maldives-config.ttl
   GRAPHDB_URL: http://localhost:7200
   V1_SPATIAL_INDEX_DIR: graphdb-home-geosparql-v1/data/repositories/maldives/storage/GeoSPARQL
   V2_SPATIAL_INDEX_DIR: graphdb-home-geosparql-v2/data/repositories/maldives/storage/GeoSPARQL
@@ -46,7 +47,7 @@ tasks:
         BENCHMARK_BASELINE_RESULTS="{{.BASELINE}}/v2"
         BENCHMARK_CANDIDATE_RESULTS="{{.CANDIDATE}}/v2"
         scripts/generate-benchmark-report.sh
-        queries/manifest.json benchmark-results/local
+        "${BENCHMARK_MANIFEST:-queries/manifest.json}" benchmark-results/local
         "{{.CANDIDATE}}/comparison.md"
 
   download-data:
@@ -568,7 +569,7 @@ tasks:
             echo "Creating repository $repository_id"
             curl --fail --show-error \
               --request POST \
-              --form "config=@maldives-config.ttl;type=text/turtle" \
+              --form "config=@{{.REPOSITORY_CONFIG}};type=text/turtle" \
               "$graphdb_url/rest/repositories"
             ;;
           *)
