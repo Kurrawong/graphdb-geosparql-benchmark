@@ -333,6 +333,8 @@ tasks:
 
   remove-geometry-collection-wkts:
     internal: true
+    status:
+      - '[ "{{.PRESERVE_GEOMETRY_COLLECTIONS | default "false"}}" = "true" ]'
     requires:
       vars:
         - GRAPHDB_URL

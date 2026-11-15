@@ -26,6 +26,7 @@ repository_dir="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 cd "$repository_dir"
 repository_id=maldives
 dataset_dir=""
+preserve_collections=false
 if [ -n "${BENCHMARK_DATASET_DIR:-}" ]; then
   dataset_dir="$(CDPATH= cd -- "$BENCHMARK_DATASET_DIR" && pwd)"
   repository_id="$(jq --exit-status --raw-output '
@@ -34,6 +35,7 @@ if [ -n "${BENCHMARK_DATASET_DIR:-}" ]; then
   export BENCHMARK_DATASET_METADATA="$dataset_dir/dataset.json"
   export BENCHMARK_MANIFEST="$dataset_dir/queries/manifest.json"
   export BENCHMARK_QUERIES_DIR="$dataset_dir/queries"
+  preserve_collections="$(jq --raw-output '.preserve_geometry_collections // false' "$dataset_dir/dataset.json")"
   "$repository_dir/scripts/validate-query-manifest.sh" "$BENCHMARK_MANIFEST" "$BENCHMARK_QUERIES_DIR"
 fi
 results_root="${BENCHMARK_RESULTS_DIR:-$repository_dir/benchmark-results/local}"
@@ -96,7 +98,7 @@ jq --null-input --arg image "$GRAPHDB_IMAGE" --arg image_id "$image_id" \
 if [ -n "$dataset_dir" ]; then
   task benchmark:initialise-local GRAPHDB_URL="$graphdb_url" SPATIAL_INDEX_DIR="$index_dir" \
     REPOSITORY_ID="$repository_id" REPOSITORY_CONFIG="$dataset_dir/repository-config.ttl" \
-    DATA_DIR="$dataset_dir" DATA_FILE=data.ttl
+    DATA_DIR="$dataset_dir" DATA_FILE=data.ttl PRESERVE_GEOMETRY_COLLECTIONS="$preserve_collections"
 else
   task download-data
   task benchmark:initialise-local GRAPHDB_URL="$graphdb_url" SPATIAL_INDEX_DIR="$index_dir"

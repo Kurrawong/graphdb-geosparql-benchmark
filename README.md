@@ -163,9 +163,71 @@ geometries. Compare the same generated dataset, query definitions, runtime,
 index settings and measurement protocol across builds. Baseline output
 differences must be reported as correctness differences; timings for different
 outputs are not like-for-like speedups. Synthetic coverage supplements the
-Maldives real-world workload. It does not establish universal CRS correctness,
-and this suite does not cover collections, empty sources, polar/wraparound
-geometry, or projected CRSs other than EPSG:3857.
+Maldives real-world workload. It does not establish universal CRS correctness.
+The distribution profiles use EPSG:3857 as their only projected CRS.
+
+### Targeted query workloads
+
+Use separate controlled fixtures to exercise specific lookup and evaluation
+paths without changing the distribution-profile baselines:
+
+```sh
+python3 scripts/generate-targeted-dataset.py \
+  .local-benchmarks/datasets/paging-10k --workload paging --count 10000
+
+BENCHMARK_DATASET_DIR="$PWD/.local-benchmarks/datasets/paging-10k" \
+  task benchmark:local PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=paging-baseline
+```
+
+| `--workload` | Coverage |
+| --- | --- |
+| `paging` | 998/1000/1002 native candidate documents, broad traversal, and a Feature with 1001 source geometries spanning a page |
+| `pruning` | Native CRS84 disjoint queries with 49%, 50% and 51% certified exclusions around the strict-half selection threshold |
+| `equality` | Matching lines and polygons, equal-envelope nonmatches, and unrelated envelopes |
+| `large-geometries` | Dense polygons with thousands of vertices, hull-rejectable envelope false positives, holes, and true intersections |
+| `mixed-crs` | CRS84/EPSG:3857 source mixtures with native and projected bounds in both argument orders |
+| `bound-batch` | Fully bound literal relations and scalar references batched with `VALUES`, avoiding index traversal |
+| `topology` | Controlled shared-edge touches, line/line and line/area crosses, and polygon overlaps |
+| `guardrails` | Fixed 13-source checks for empties, collections, antimeridian and near-pole geometry, including EPSG:3031 |
+
+Counts are geometry resources, each with one source geometry literal. Features
+are separate entities. The paging workload associates several Geometry
+resources with each Feature; its scalar reference uses `FILTER EXISTS` over
+all default geometries. This preserves existential entity semantics and returns
+every projected geometry row for a matching Feature, including a source that
+does not itself satisfy the relation. Comparing only the displayed WKT would
+give an incorrect reference.
+
+Use counts divisible by 100, at least 1500 for `paging` and 100 for other
+scalable workloads. Defaults are 10000, or 1000 for `bound-batch`; batches are
+limited to 10000 pairs per HTTP request. `guardrails` has a fixed small corpus:
+omit `--count`. The large-geometry fixture caps its complex-source cohort at 64
+and increases the simple background when the count grows. Increasing its count
+does not increase every source's vertex count.
+
+`--profile projected` is available for paging, equality, large geometries,
+topology and bound batches. Paging's 998/1000/1002 candidate counts apply only to
+native lookup; projected prefix-cell lookup can retain more candidates.
+Pruning requires `native`; mixed-CRS and guardrail fixtures select their own
+source CRSs. Source and query literals retain their CRS and argument order.
+
+The local runner preserves collections when the dataset requests it. The
+Maldives workflow keeps its existing collection-removal policy. To initialise
+a guardrail dataset manually through `benchmark:initialise-local`, pass
+`PRESERVE_GEOMETRY_COLLECTIONS=true`; its corpus check rejects a run that loses
+the collection sources. Guardrails measure a small supported fixture, not
+collection or polar performance at large scale.
+
+Validate these runs with the same `validate-synthetic-results.py` command.
+Known row counts supplement complete indexed/reference result hashes. Keep
+the fixed guardrails small while scaling the distribution and relevant
+targeted workloads. Check generation and validation logic with:
+
+```sh
+python3 tests/test-synthetic-datasets.py
+python3 tests/test-targeted-datasets.py
+```
 
 ## Run a complete comparison
 

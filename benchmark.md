@@ -30,8 +30,19 @@ configuration, source counts and checksums are recorded together. It is a
 separate workload, not a replacement for the Maldives comparison. See the
 synthetic dataset commands in README.md.
 
-Geometry collections, Egenhofer, RCC8, DE-9IM, and incremental updates remain
-outside these performance suites.
+Controlled targeted fixtures additionally exercise paging and entity grouping,
+the certified-pruning threshold, equality, large polygon payloads, both
+mixed-CRS argument orders, batched fully bound/scalar evaluation, and boundary
+topology. A separate fixed small guardrail fixture checks empty and collection
+sources and antimeridian/polar cases. Egenhofer, RCC8, DE-9IM, incremental updates
+and large-scale collection workloads remain outside these performance suites.
+
+Targeted fixtures record known result counts and the intended native candidate
+counts where construction makes those predictable. Paging's reference tests
+whether any default geometry of a Feature satisfies the relation, then retains
+all projected rows for that Feature. Indexed and scalar queries therefore
+compare entity-level results rather than independently filtering each displayed
+source literal. See README.md for the workload matrix and generation commands.
 
 ## Comparing local builds
 
@@ -67,6 +78,8 @@ Before indexing, both variants remove every `geo:asWKT` literal whose lexical
 form contains `GEOMETRYCOLLECTION`. This gives both implementations the same
 queryable geometry corpus because v1 cannot evaluate those values reliably.
 Geometry-collection support is therefore not measured by the primary suite.
+The targeted guardrail fixture explicitly preserves its collection literals;
+its complete corpus and indexed/reference checks must pass with those inputs.
 
 The v2 `master` branch is resolved to a Git commit before its suite starts. The
 same commit is used for every v2 build and query in that run and is recorded in

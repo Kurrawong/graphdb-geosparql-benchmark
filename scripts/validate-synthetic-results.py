@@ -47,12 +47,10 @@ def validate(dataset, results):
     corpus = read(results / 'corpus/summary.json')
     if corpus['row_count'] != metadata['geometries']:
         raise ValueError('Corpus does not contain the generated geometry count')
-    cover = records['geof-within-cover']
-    if (cover['row_count'], cover['canonical_sha256']) != (corpus['row_count'], corpus['canonical_sha256']):
-        raise ValueError('Known full-cover query does not return the complete corpus')
-    outside = records['geof-disjoint-outside']
-    if (outside['row_count'], outside['canonical_sha256']) != (corpus['row_count'], corpus['canonical_sha256']):
-        raise ValueError('Known outside query does not return the complete corpus')
+    for query_id in metadata.get('corpus_equivalent_queries', ['geof-within-cover', 'geof-disjoint-outside']):
+        item = records[query_id]
+        if (item['row_count'], item['canonical_sha256']) != (corpus['row_count'], corpus['canonical_sha256']):
+            raise ValueError(f'Known full-corpus query does not return the complete corpus: {query_id}')
     return {'queries': len(records), 'indexed_scalar_pairs': pairs, 'known_results': len(known),
             'corpus_rows': corpus['row_count'], 'profile': metadata['profile'],
             'distribution': metadata['distribution'], 'status': 'pass'}
