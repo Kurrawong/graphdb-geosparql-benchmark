@@ -186,7 +186,9 @@ of the profile's grid (default 10000). Source sizes stay the same and the
 query bounds scale with it. The default square is about 0.09 by 0.045 degrees,
 a two-by-two block of prefix cells at QUAD precision 11; `--extent 500000`
 spreads the same sources over several hundred cells. Record the extent with
-any comparison: lookup selectivity depends on it.
+any comparison: lookup selectivity depends on it. On a wide `mixed-mga56`
+square the cover bound reaches further past the square, because MGA grid
+lines are curved in CRS84 and the bound must still contain every source.
 
 ### Targeted query workloads
 

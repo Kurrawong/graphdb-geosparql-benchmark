@@ -126,6 +126,21 @@ class SyntheticDatasetsTest(unittest.TestCase):
         x, y = (float(part) for part in native.split('POINT(')[1].split(')')[0].split())
         self.assertTrue(151.9 < x < 152.2 and -28.1 < y < -27.9, (x, y))
 
+    def test_cover_bound_contains_the_square_where_grid_lines_curve_in_the_bound_crs(self):
+        # MGA grid lines are curved in longitude and latitude; a CRS84 bound has straight edges there.
+        frame = generator.Frame('mga56', generator.MGA56_ORIGIN)
+        for extent in (10000, 500000):
+            path = self.generate(f'curved-{extent}', 'mixed-mga56', extent=extent)
+            ring = (path / 'queries/sf-within-cover.rq').read_text().split('POLYGON((')[1].split('))')[0]
+            corners = [tuple(float(value) for value in pair.split()) for pair in ring.split(', ')][:4]
+            # Source vertices stay at least 42 m inside the placement square.
+            steps = [42 + step * (extent - 84) / 400 for step in range(401)]
+            for point in ([(t, 42) for t in steps] + [(t, extent - 42) for t in steps]
+                          + [(42, t) for t in steps] + [(extent - 42, t) for t in steps]):
+                x, y = (float(value) for value in frame.coordinate(point, 'crs84').split())
+                for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+                    self.assertGreater((bx - ax) * (y - ay) - (by - ay) * (x - ax), 0, (extent, point))
+
     def test_extent_scales_placement_and_bounds_and_is_recorded(self):
         narrow, wide = self.generate('narrow'), self.generate('wide', extent=500000)
         self.assertEqual(json.loads((wide / 'dataset.json').read_text())['extent'], 500000)

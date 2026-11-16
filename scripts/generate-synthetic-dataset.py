@@ -210,7 +210,11 @@ def generate(output, profile, distribution, count, seed, extent=10000):
             if rows is not None:
                 known_rows[name] = rows
 
-    cover = rectangle(-20, extent + 20)
+    # MGA grid lines are curved in longitude and latitude, while a bound in a geographic CRS has straight edges
+    # between its corners. The bound that must contain every source reaches past that curvature.
+    curvature = extent ** 2 / (8 * RADIUS) if grid == 'mga56' and bound_crs != 'mga56' else 0
+    margin = 20 if curvature < 20 else 20 + math.ceil(curvature)
+    cover = rectangle(-margin, extent + margin)
     region = rectangle(-20, extent * 7 // 10)
     add('sf-within-region', 'sfWithin', region, bound_crs, 'Broad containment')
     add('sf-intersects-region', 'sfIntersects', region, bound_crs, 'Broad intersection')
