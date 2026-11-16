@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise dataset reproducibility and failures in synthetic result validation."""
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -27,9 +28,9 @@ class SyntheticDatasetsTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
 
-    def generate(self, name='dataset', profile='native', distribution='uniform', seed=40):
+    def generate(self, name='dataset', profile='native', distribution='uniform', seed=40, extent=10000):
         path = self.root / name
-        generator.generate(path, profile, distribution, 48, seed)
+        generator.generate(path, profile, distribution, 48, seed, extent)
         return path
 
     def summaries(self, dataset):
@@ -82,6 +83,60 @@ class SyntheticDatasetsTest(unittest.TestCase):
             self.assertIn('rep:repositoryID "synthetic"', (path / 'repository-config.ttl').read_text())
             manifest = json.loads((path / 'queries/manifest.json').read_text())
             self.assertEqual(sum('equivalent_to' in entry for entry in manifest['queries']) * 2, len(manifest['queries']))
+
+    def test_original_profiles_keep_their_generated_files(self):
+        expected = {'native': 'e0171b54351150a8e21d6e06c3e3e293f608e8f4b9a93dc889261050b438cd4e',
+                    'projected': '506275265a68a301530baf0f81621c71c1c65e461dc3eba5df9a36a6adeb5718',
+                    'mixed': '5fc269efb8fd18c92f9bb0b6cba8a8176f60ef53b89822a74559effca3d1a56b'}
+        for profile, digest in expected.items():
+            path = self.generate(profile, profile)
+            combined = hashlib.sha256()
+            for file in sorted(path.rglob('*')):
+                # dataset.json records the generator checksum, which changes with any generator edit.
+                if file.is_file() and file.name != 'dataset.json':
+                    combined.update(str(file.relative_to(path)).encode())
+                    combined.update(file.read_bytes())
+            self.assertEqual(combined.hexdigest(), digest, profile)
+            self.assertNotIn('extent', json.loads((path / 'dataset.json').read_text()))
+
+    def test_other_source_crs_profiles_label_and_order_their_coordinates(self):
+        # Latitude comes first in the two geographic CRSs; the MGA grid writes easting then northing.
+        cases = {'epsg4326': ('EPSG/0/4326', (60, 60.1), (20, 20.1)),
+                 'gda2020': ('EPSG/0/7844', (-27.5, -27.4), (153, 153.1)),
+                 'mga56': ('EPSG/0/7856', (400000, 410000), (6900000, 6910000))}
+        for profile, (crs, first, second) in cases.items():
+            path = self.generate(profile, profile)
+            value = json.loads((path / 'dataset.json').read_text())
+            self.assertEqual(list(value['source_crs']), ['http://www.opengis.net/def/crs/' + crs])
+            point = next(line for line in (path / 'data.ttl').read_text().splitlines() if 'POINT(' in line)
+            x, y = (float(part) for part in point.split('POINT(')[1].split(')')[0].split())
+            self.assertTrue(first[0] <= x < first[1] and second[0] <= y < second[1], (profile, x, y))
+            query = (path / 'queries/sf-within-native-bound.rq').read_text()
+            self.assertIn('OGC/1.3/CRS84', query)
+            self.assertIn(crs, (path / 'queries/sf-within-region.rq').read_text())
+
+    def test_mga_grid_converts_to_longitude_and_latitude(self):
+        longitude, latitude = generator.mga56_to_geographic(500000, 6957918)
+        self.assertAlmostEqual(longitude, 153.0, places=9)
+        self.assertAlmostEqual(latitude, -27.5024, places=4)
+        path = self.generate('mixed-mga', 'mixed-mga56')
+        value = json.loads((path / 'dataset.json').read_text())
+        self.assertEqual(sorted(value['source_crs'].values()), [24, 24])
+        native = next(line for line in (path / 'data.ttl').read_text().splitlines() if 'CRS84> POINT(' in line)
+        x, y = (float(part) for part in native.split('POINT(')[1].split(')')[0].split())
+        self.assertTrue(151.9 < x < 152.2 and -28.1 < y < -27.9, (x, y))
+
+    def test_extent_scales_placement_and_bounds_and_is_recorded(self):
+        narrow, wide = self.generate('narrow'), self.generate('wide', extent=500000)
+        self.assertEqual(json.loads((wide / 'dataset.json').read_text())['extent'], 500000)
+        self.assertNotEqual((narrow / 'data.ttl').read_bytes(), (wide / 'data.ttl').read_bytes())
+        self.assertNotEqual((narrow / 'queries/sf-within-selective-region.rq').read_text(),
+                            (wide / 'queries/sf-within-selective-region.rq').read_text())
+        self.assertEqual(json.loads((narrow / 'known-results.json').read_text()),
+                         json.loads((wide / 'known-results.json').read_text()))
+        with self.assertRaises(ValueError):
+            generator.generate(self.root / 'invalid-extent', 'native', 'uniform', 48, 40, 550)
+        self.assertFalse((self.root / 'invalid-extent').exists())
 
     def test_seed_changes_the_corpus(self):
         self.assertNotEqual((self.generate('first') / 'data.ttl').read_bytes(),

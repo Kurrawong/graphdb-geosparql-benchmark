@@ -164,7 +164,29 @@ index settings and measurement protocol across builds. Baseline output
 differences must be reported as correctness differences; timings for different
 outputs are not like-for-like speedups. Synthetic coverage supplements the
 Maldives real-world workload. It does not establish universal CRS correctness.
-The distribution profiles use EPSG:3857 as their only projected CRS.
+
+Four further profiles place the same source types in other source CRSs:
+
+| `--profile` | Sources | Location |
+| --- | --- | --- |
+| `epsg4326` | EPSG:4326, latitude first | Same positions as `native` |
+| `gda2020` | EPSG:7844, latitude first | Near Brisbane |
+| `mga56` | EPSG:7856, MGA2020 zone 56 (transverse Mercator) | Near Brisbane |
+| `mixed-mga56` | Alternating CRS84 and EPSG:7856 blocks | Near Brisbane |
+
+Their unlabelled bounds use the profile's own CRS. The three single-CRS
+profiles add `*-native-bound` queries with a CRS84 bound; `mixed-mga56` adds
+explicit CRS84 and EPSG:7856 bounds as `mixed` does. The MGA grid is laid out
+in EPSG:7856 metres, so a bound that is a rectangle there is not a rectangle
+in CRS84. `native`, `projected` and `mixed` keep their original files for the
+same arguments.
+
+`--extent` sets the side of the square that holds the sources, in map units
+of the profile's grid (default 10000). Source sizes stay the same and the
+query bounds scale with it. The default square is about 0.09 by 0.045 degrees,
+a two-by-two block of prefix cells at QUAD precision 11; `--extent 500000`
+spreads the same sources over several hundred cells. Record the extent with
+any comparison: lookup selectivity depends on it.
 
 ### Targeted query workloads
 
@@ -190,6 +212,8 @@ BENCHMARK_DATASET_DIR="$PWD/.local-benchmarks/datasets/paging-10k" \
 | `bound-batch` | Fully bound literal relations and scalar references batched with `VALUES`, avoiding index traversal |
 | `topology` | Controlled shared-edge touches, line/line and line/area crosses, and polygon overlaps |
 | `guardrails` | Fixed 13-source checks for empties, collections, antimeridian and near-pole geometry, including EPSG:3031 |
+| `join` | 100 zones and the remaining sources as sites; entity-to-entity relations where every zone or site drives one index lookup |
+| `filtered` | A spatial relation combined with a rare or common ordinary triple pattern, plus `LIMIT 10` variants |
 
 Counts are geometry resources, each with one source geometry literal. Features
 are separate entities. The paging workload associates several Geometry
@@ -199,8 +223,19 @@ every projected geometry row for a matching Feature, including a source that
 does not itself satisfy the relation. Comparing only the displayed WKT would
 give an incorrect reference.
 
-Use counts divisible by 100, at least 1500 for `paging` and 100 for other
-scalable workloads. Defaults are 10000, or 1000 for `bound-batch`; batches are
+Half of the `join` zones are concave, so sites in the notched quarter are
+inside a zone's envelope and outside its polygon. Its `?wkt` column is the
+zone, which identifies the pair. The disjoint join is limited to one row of
+ten zones to keep the result near ten rows per site. `join` and `filtered`
+place at most 10000 distinct points.
+
+A `LIMIT` query without an order may return any matching rows, so the
+`filtered` limited queries have no scalar reference pair. They are written to
+`limit-queries/` with their own manifest, outside the validated suite; check
+that each returns exactly its limit and only rows of the full query it names.
+
+Use counts divisible by 100, at least 1500 for `paging`, 200 for `join` and
+100 for other scalable workloads. Defaults are 10000, or 1000 for `bound-batch`; batches are
 limited to 10000 pairs per HTTP request. `guardrails` has a fixed small corpus:
 omit `--count`. The large-geometry fixture caps its complex-source cohort at 64
 and increases the simple background when the count grows. Increasing its count

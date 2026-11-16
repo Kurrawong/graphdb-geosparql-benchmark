@@ -28,7 +28,7 @@ class TargetedDatasetsTest(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def generate(self, workload, name=None, profile='native'):
-        count = None if workload == 'guardrails' else 1500 if workload == 'paging' else 100
+        count = None if workload == 'guardrails' else {'paging': 1500, 'join': 200}.get(workload, 100)
         output = self.root / (name or workload)
         targeted.generate(output, workload, count, profile)
         return output
@@ -54,6 +54,35 @@ class TargetedDatasetsTest(unittest.TestCase):
         meta = json.loads((path / 'dataset.json').read_text())
         self.assertEqual([meta['lookup_expectations']['sf-within-page-' + label]['candidate_documents']
                           for label in ['below', 'at', 'above']], [998, 1000, 1002])
+
+    def test_join_pairs_every_site_with_at_most_one_zone(self):
+        path = self.root / 'join-full'
+        targeted.generate(path, 'join', 10000)
+        known = json.loads((path / 'known-results.json').read_text())
+        meta = json.loads((path / 'dataset.json').read_text())
+        self.assertEqual(meta['geometries'], 10000)
+        self.assertEqual(known['sf-join-within'], known['sf-join-contains'])
+        # Sites in the notched quarter of a concave zone are inside its envelope and outside the polygon.
+        self.assertTrue(8000 < known['sf-join-within'] < 9900)
+        self.assertTrue(10 * 9900 - 1000 < known['sf-join-disjoint'] < 10 * 9900)
+        data = (path / 'data.ttl').read_text()
+        self.assertEqual(data.count(', ex:Zone;'), 100)
+        self.assertEqual(data.count(', ex:Site;'), 9900)
+        query = (path / 'queries/sf-join-within.rq').read_text()
+        self.assertIn('?result geo:sfWithin ?zone', query)
+        self.assertNotIn('wktLiteral', query)
+        self.assertIn('geof:sfContains(?wkt, ?siteWkt)', (path / 'queries/geof-join-contains.rq').read_text())
+
+    def test_filtered_queries_combine_an_ordinary_pattern_and_limited_queries_name_their_full_query(self):
+        path = self.generate('filtered')
+        self.assertIn('?result ex:category ex:c7 .', (path / 'queries/sf-within-rare-category.rq').read_text())
+        limited = json.loads((path / 'limit-queries/manifest.json').read_text())['queries']
+        self.assertEqual([entry['subset_of'] for entry in limited], ['sf-within-broad', 'sf-within-rare-category'])
+        manifest = json.loads((path / 'queries/manifest.json').read_text())
+        for entry in limited:
+            self.assertTrue((path / 'limit-queries' / entry['file']).read_text().rstrip().endswith('LIMIT 10'))
+            self.assertIn(entry['subset_of'], [item['id'] for item in manifest['queries']])
+            self.assertNotIn(entry['id'], [item['id'] for item in manifest['queries']])
 
     def test_pruning_fixture_has_known_counts_on_each_side_of_strict_half(self):
         path = self.generate('pruning')
@@ -114,7 +143,8 @@ class TargetedDatasetsTest(unittest.TestCase):
     def test_invalid_parameters_are_rejected_without_creating_output(self):
         for workload, count, profile in [('paging', 100, 'native'), ('pruning', 100, 'projected'),
                                          ('equality', 101, 'native'), ('bound-batch', 10100, 'native'),
-                                         ('guardrails', 100, 'native')]:
+                                         ('guardrails', 100, 'native'), ('join', 100, 'native'),
+                                         ('filtered', 10100, 'native')]:
             path = self.root / workload
             with self.assertRaises(ValueError):
                 targeted.generate(path, workload, count, profile)

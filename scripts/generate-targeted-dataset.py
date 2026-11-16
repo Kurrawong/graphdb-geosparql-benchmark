@@ -11,7 +11,7 @@ SPEC = importlib.util.spec_from_file_location('synthetic', Path(__file__).with_n
 geometry = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(geometry)
 WORKLOADS = ('paging', 'pruning', 'equality', 'large-geometries', 'mixed-crs',
-             'bound-batch', 'topology', 'guardrails')
+             'bound-batch', 'topology', 'guardrails', 'join', 'filtered')
 
 
 def source(wkt, projected=False):
@@ -43,13 +43,13 @@ class Dataset:
         self.count, self.features = 0, set()
         self.crs, self.types = Counter(), Counter()
 
-    def add_geometry(self, value, feature=None):
+    def add_geometry(self, value, feature=None, attributes=''):
         index = self.count
         self.count += 1
         feature = str(index) if feature is None else str(feature)
         self.features.add(feature)
         self.stream.write(f'ex:f{feature} a geo:Feature; geo:hasDefaultGeometry ex:g{index} .\n'
-                          f'ex:g{index} a geo:Geometry; geo:asWKT {term(value)} .\n')
+                          f'ex:g{index} a geo:Geometry{attributes}; geo:asWKT {term(value)} .\n')
         crs = value[1:value.index('>')] if value.startswith('<') else geometry.CRS84
         self.crs[crs] += 1
         self.types[value.split('>')[-1].strip().split('(')[0].strip().lower()] += 1
@@ -254,6 +254,75 @@ def guardrails(data, count, projected):
                           relation, bound, 'Small CRS and geometry-type candidate guardrail', reverse=reverse)
 
 
+def lattice(index):
+    """Scatter up to 10000 distinct points over the 10 km square, clear of whole-metre lines."""
+    return (index * 7919) % 10000 + .5, (index * 6007) % 10000 + .5
+
+
+def join(data, count, projected):
+    zones = {}
+    for column in range(10):
+        for row in range(10):
+            x, y = 1000 * column, 1000 * row
+            corners = [(x, y), (x + 1000, y), (x + 1000, y + 1000), (x, y + 1000)]
+            notched = (column + row) % 2 == 1
+            if notched:
+                # A concave zone leaves its north-east quarter outside the polygon but inside its envelope.
+                corners = [(x, y), (x + 1000, y), (x + 1000, y + 500), (x + 500, y + 500),
+                           (x + 500, y + 1000), (x, y + 1000)]
+            zones[column, row] = notched
+            data.add_geometry(source(geometry.polygon(corners, projected), projected),
+                              attributes=f', ex:Zone; ex:row {row}')
+    sites = count - len(zones)
+    inside = first_row = 0
+    for index in range(sites):
+        x, y = lattice(index)
+        data.add_geometry(point(x, y, projected), attributes=', ex:Site')
+        in_zone = not (zones[int(x // 1000), int(y // 1000)] and x % 1000 > 500 and y % 1000 > 500)
+        inside += in_zone
+        first_row += in_zone and y < 1000
+    zone = '  ?zone a ex:Zone ; geo:asWKT ?wkt .\n'
+    for name, zone, relation, pattern, rows in [
+            ('within', zone, 'sfWithin', '?result geo:sfWithin ?zone', inside),
+            ('contains', zone, 'sfContains', '?zone geo:sfContains ?result', inside),
+            ('disjoint', '  ?zone a ex:Zone ; ex:row 0 ; geo:asWKT ?wkt .\n', 'sfDisjoint',
+             '?result geo:sfDisjoint ?zone', 10 * sites - first_row)]:
+        arguments = '?wkt, ?siteWkt' if relation == 'sfContains' else '?siteWkt, ?wkt'
+        data.queries('sf-join-' + name, zone + '  ?result a ex:Site .\n  ' + pattern + ' .',
+                     zone + '  ?result a ex:Site ; geo:asWKT ?siteWkt .\n'
+                     f'  FILTER(geof:{relation}({arguments}))',
+                     'Spatial join: every zone or site drives one index lookup; ?wkt is the zone', rows)
+
+
+def filtered(data, count, projected):
+    positions = [lattice(index) for index in range(count)]
+    for index, (x, y) in enumerate(positions):
+        data.add_geometry(point(x, y, projected),
+                          attributes=f'; ex:category ex:c{index % 100}; ex:half ex:h{index % 2}')
+    broad, selective = box(0, 0, 10000, 5000, projected), box(2000, 2000, 3000, 3000, projected)
+    south = [index for index, (x, y) in enumerate(positions) if y < 5000]
+    cases = [('broad', '', broad, len(south)),
+             ('rare-category', '  ?result ex:category ex:c7 .\n', broad, sum(i % 100 == 7 for i in south)),
+             ('common-half', '  ?result ex:half ex:h0 .\n', selective,
+              sum(i % 2 == 0 and 2000 < x < 3000 and 2000 < y < 3000 for i, (x, y) in enumerate(positions)))]
+    limited = {'schema_version': 1, 'queries': []}
+    (data.output / 'limit-queries').mkdir()
+    for name, pattern, bound, rows in cases:
+        base = pattern + '  ?result geo:asWKT ?wkt .\n'
+        indexed = base + f'  ?result geo:sfWithin {term(bound)} .'
+        data.queries('sf-within-' + name, indexed, base + f'  FILTER(geof:sfWithin(?wkt, {term(bound)}))',
+                     'Spatial relation combined with an ordinary triple pattern', rows)
+        if name != 'common-half':
+            query_id = f'sf-within-{name}-limit-10'
+            (data.output / 'limit-queries' / (query_id + '.rq')).write_text(
+                geometry.PREFIXES + 'PREFIX ex: <https://example.org/targeted/>\n'
+                'SELECT ?result ?wkt WHERE {\n' + indexed + '\n}\nLIMIT 10\n')
+            limited['queries'].append({'id': query_id, 'file': query_id + '.rq', 'limit': 10,
+                                       'subset_of': 'sf-within-' + name})
+    # A limited query may return any ten matches, so it has no reference pair; check it against its full query.
+    geometry.write_json(data.output / 'limit-queries/manifest.json', limited)
+
+
 def generate(output, workload, count=None, profile='native'):
     if output.exists():
         raise ValueError(f'Output already exists: {output}')
@@ -264,8 +333,11 @@ def generate(output, workload, count=None, profile='native'):
     if workload == 'pruning' and profile != 'native':
         raise ValueError('The certified-pruning threshold workload requires native CRS84')
     count = count if count is not None else (1000 if workload == 'bound-batch' else 10000)
-    if count < (1500 if workload == 'paging' else 100) or count % 100:
-        raise ValueError('Count must be a multiple of 100, at least 1500 for paging and 100 otherwise')
+    minimum = {'paging': 1500, 'join': 200}.get(workload, 100)
+    if count < minimum or count % 100:
+        raise ValueError('Count must be a multiple of 100, at least 1500 for paging, 200 for join and 100 otherwise')
+    if workload in ('join', 'filtered') and count > 10000:
+        raise ValueError('Join and filtered workloads place at most 10000 distinct points')
     if workload == 'bound-batch' and count > 10000:
         raise ValueError('Bound batches are limited to 10000 pairs per request')
     effective = 'mixed' if workload in ('mixed-crs', 'guardrails') else profile
