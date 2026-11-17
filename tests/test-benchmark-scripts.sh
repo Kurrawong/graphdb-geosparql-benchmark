@@ -169,7 +169,7 @@ assert_report_contains() {
 
 assert_report_contains 'Benchmark execution: **COMPLETE**'
 assert_report_contains 'Correctness expectations: **PASS**'
-assert_report_contains 'Cross-variant outputs: **17 matching, 2 expected differences, 0 unexpected results**'
+assert_report_contains 'Cross-variant outputs: **19 matching, 2 expected differences, 0 unexpected results**'
 assert_report_contains '| `sf-crosses-line` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | n/a | 1 / 0 | EXPECTED DIFFERENCE |'
 assert_report_contains \
   '| `sf-within-region` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | 2× |'
@@ -229,7 +229,7 @@ if "$repository_dir/scripts/generate-benchmark-report.sh" \
 fi
 assert_report_contains '| `sf-contains-point` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | n/a | 1 / 1 | UNEXPECTED DIFFERENCE |'
 assert_report_contains 'Correctness expectations: **FAIL**'
-assert_report_contains 'Cross-variant outputs: **16 matching, 2 expected differences, 1 unexpected results**'
+assert_report_contains 'Cross-variant outputs: **18 matching, 2 expected differences, 1 unexpected results**'
 jq --arg canonical_sha256 "$v2_summary_hash" \
   '.canonical_sha256 = $canonical_sha256' "$v2_summary" \
   > "$v2_summary.part"
@@ -254,6 +254,6 @@ if "$repository_dir/scripts/generate-benchmark-report.sh" \
   exit 1
 fi
 assert_report_contains '| `sf-equals-point` | 4.0 (4.0–4.0) | 2.0 (2.0–2.0) | 2× | 1 / 1 | UNEXPECTED MATCH |'
-assert_report_contains 'Cross-variant outputs: **17 matching, 1 expected differences, 1 unexpected results**'
+assert_report_contains 'Cross-variant outputs: **19 matching, 1 expected differences, 1 unexpected results**'
 
 echo "Benchmark script tests passed"

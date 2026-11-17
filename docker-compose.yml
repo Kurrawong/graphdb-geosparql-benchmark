@@ -2,10 +2,10 @@ services:
   graphdb-geosparql-v1:
     profiles:
       - v1
-    image: ontotext/graphdb:11.4.0
+    image: ${GRAPHDB_IMAGE:-ontotext/graphdb:11.4.0}
     container_name: graphdb-geosparql-v1
     ports:
-      - "127.0.0.1:7200:7200"
+      - "127.0.0.1:${GRAPHDB_PORT:-7200}:7200"
     environment:
       SIS_DATA: ${GRAPHDB_SIS_DATA:-}
       GDB_JAVA_OPTS: >-
@@ -16,21 +16,23 @@ services:
         -Dentity-pool-implementation=transactional
     volumes:
       - ./graphdb-home-geosparql-v1:/opt/graphdb/home
-      - ./sis-data:/opt/graphdb/sis-data:ro
+      - ${GRAPHDB_SIS_DIR:-./sis-data}:/opt/graphdb/sis-data:${GRAPHDB_SIS_MODE:-ro}
     restart: unless-stopped
 
   graphdb-geosparql-v2:
     profiles:
       - v2
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ${GEOSPARQL_BUILD_CONTEXT:-.}
+      dockerfile: ${GEOSPARQL_V2_DOCKERFILE:-Dockerfile}
       args:
         GEOSPARQL_V2_REF: ${GEOSPARQL_V2_REF:-master}
-    image: graphdb-geosparql-v2:11.4.0
-    container_name: graphdb-geosparql-v2
+        GRAPHDB_IMAGE: ${GRAPHDB_IMAGE:-ontotext/graphdb:11.4.0}
+        MAVEN_IMAGE: ${MAVEN_IMAGE:-maven:3.9.11-eclipse-temurin-21}
+    image: ${GEOSPARQL_V2_IMAGE:-graphdb-geosparql-v2:11.4.0}
+    container_name: ${GRAPHDB_V2_CONTAINER:-graphdb-geosparql-v2}
     ports:
-      - "127.0.0.1:7200:7200"
+      - "127.0.0.1:${GRAPHDB_PORT:-7200}:7200"
     environment:
       SIS_DATA: ${GRAPHDB_SIS_DATA:-}
       GDB_JAVA_OPTS: >-
@@ -40,6 +42,6 @@ services:
         -Dgraphdb.workbench.cors.origin=*
         -Dentity-pool-implementation=transactional
     volumes:
-      - ./graphdb-home-geosparql-v2:/opt/graphdb/home
-      - ./sis-data:/opt/graphdb/sis-data:ro
+      - ${GRAPHDB_V2_HOME:-./graphdb-home-geosparql-v2}:/opt/graphdb/home
+      - ${GRAPHDB_SIS_DIR:-./sis-data}:/opt/graphdb/sis-data:${GRAPHDB_SIS_MODE:-ro}
     restart: unless-stopped

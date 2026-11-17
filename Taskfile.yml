@@ -6,12 +6,50 @@ vars:
   DATA_ARCHIVE: mdv.osm.ttl.bz2
   DATA_URL: https://osm2rdf.cs.uni-freiburg.de/ttl/mdv.osm.ttl.bz2
   REPOSITORY_ID: maldives
+  REPOSITORY_CONFIG: maldives-config.ttl
   GRAPHDB_URL: http://localhost:7200
   V1_SPATIAL_INDEX_DIR: graphdb-home-geosparql-v1/data/repositories/maldives/storage/GeoSPARQL
   V2_SPATIAL_INDEX_DIR: graphdb-home-geosparql-v2/data/repositories/maldives/storage/GeoSPARQL
   V2_REPOSITORY: https://github.com/Kurrawong/graphdb-geosparql-plugin.git
 
 tasks:
+  benchmark:initialise-local:
+    desc: Import and index a fresh local benchmark repository
+    requires:
+      vars: [GRAPHDB_URL, SPATIAL_INDEX_DIR]
+    cmds:
+      - task: initialise
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: remove-geometry-collection-wkts
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+      - task: enable-spatial-index
+        vars:
+          GRAPHDB_URL: "{{.GRAPHDB_URL}}"
+          SPATIAL_INDEX_DIR: "{{.SPATIAL_INDEX_DIR}}"
+          V2_SPATIAL_INDEX_DIR: "{{.SPATIAL_INDEX_DIR}}"
+
+  benchmark:local:
+    desc: Build and benchmark a local plugin working tree in an isolated run
+    requires:
+      vars: [PLUGIN_DIR, RUN_NAME]
+    cmds:
+      - scripts/run-local-benchmark.sh "{{.PLUGIN_DIR}}" "{{.RUN_NAME}}"
+
+  benchmark:compare-local:
+    desc: Compare two local runs, requiring identical outputs for every query
+    requires:
+      vars: [BASELINE, CANDIDATE]
+    cmds:
+      - >-
+        BENCHMARK_COMPARISON=identical
+        BENCHMARK_BASELINE_RESULTS="{{.BASELINE}}/v2"
+        BENCHMARK_CANDIDATE_RESULTS="{{.CANDIDATE}}/v2"
+        scripts/generate-benchmark-report.sh
+        "${BENCHMARK_MANIFEST:-queries/manifest.json}" benchmark-results/local
+        "{{.CANDIDATE}}/comparison.md"
+
   download-data:
     desc: Download and unpack the Maldives OSM dataset
     status:
@@ -213,7 +251,7 @@ tasks:
         case "$v1_running:$v2_running" in
           1:0)
             variant="v1"
-            plugin_revision="bundled-with-graphdb-11.4.0"
+            plugin_revision="bundled-with-graphdb-${BENCHMARK_GRAPHDB_VERSION:-11.4.0}"
             ;;
           0:1)
             variant="v2"
@@ -246,6 +284,7 @@ tasks:
       - for script in scripts/*.sh; do sh -n "$script"; done
       - for script in tests/*.sh tests/fixtures/fake-bin/*; do sh -n "$script"; done
       - tests/test-benchmark-scripts.sh
+      - tests/test-local-benchmarks.sh
       - docker compose config --quiet
 
   benchmark:clear:
@@ -294,6 +333,8 @@ tasks:
 
   remove-geometry-collection-wkts:
     internal: true
+    status:
+      - '[ "{{.PRESERVE_GEOMETRY_COLLECTIONS | default "false"}}" = "true" ]'
     requires:
       vars:
         - GRAPHDB_URL
@@ -530,7 +571,7 @@ tasks:
             echo "Creating repository $repository_id"
             curl --fail --show-error \
               --request POST \
-              --form "config=@maldives-config.ttl;type=text/turtle" \
+              --form "config=@{{.REPOSITORY_CONFIG}};type=text/turtle" \
               "$graphdb_url/rest/repositories"
             ;;
           *)

@@ -16,6 +16,7 @@ measurement protocol, and output-validation rules.
 - `bzip2`
 - `git`
 - `jq`
+- Python 3.9 or newer for synthetic datasets
 
 The GraphDB containers are configured with a 10 GB maximum JVM heap. Ensure
 Docker has enough memory available.
@@ -97,7 +98,179 @@ The regular cached image build is also available separately:
 task v2:build
 ```
 
+## Synthetic datasets
+
+Generate a reproducible workload with points, lines and four polygon forms
+(rectangular, concave, holed and 64-vertex). Sources are split approximately
+equally between points, lines and polygons. Choose `native` (CRS84), `projected`
+(EPSG:3857), or `mixed`, with `uniform` or `clustered` placement:
+
+```sh
+python3 scripts/generate-synthetic-dataset.py \
+  .local-benchmarks/datasets/mixed-uniform-100k \
+  --profile mixed --distribution uniform --count 100000 --seed 40
+
+BENCHMARK_DATASET_DIR="$PWD/.local-benchmarks/datasets/mixed-uniform-100k" \
+  task benchmark:local PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=mixed-uniform-baseline
+```
+
+Supply the compatible runtime, license and build environment described under
+the local workflow below. The dataset switch does not change plugin build
+dependencies; use the established GraphDB 11 SDK/compiler overrides when
+building a checkout whose default dependency targets GraphDB 12.
+
+Projected and mixed profiles require external Apache SIS EPSG reference data.
+Set `GRAPHDB_SIS_DATA=/opt/graphdb/sis-data` and `GRAPHDB_SIS_DIR` to the host
+directory containing `Databases/SpatialMetadata`. For a writable Derby database,
+use a dedicated copy for each process with `GRAPHDB_SIS_MODE=rw`. The default
+mount is read-only and is suitable only for CRS data prepared for read-only use.
+Record the EPSG data version with comparisons. These settings configure the
+runtime; they do not add reference data or dependencies to the plugin package.
+
+The generator refuses existing output directories. It records the seed,
+geometry/CRS counts, generator checksum, and hashes of the data, repository
+configuration and queries in `dataset.json`. All profiles use a square spanning
+10,000 EPSG:3857 map units near 20 E, 60 N. Fixture generation uses spherical Mercator formulas outside
+the timed interval. Cross-CRS equivalence of straight polygon edges is not
+assumed.
+
+Every indexed query has a scalar counterpart using the same source geometry
+literals and argument order. The scalar path bypasses Lucene; in the Jena-backed
+plugin it provides the exact-evaluation reference. Queries include broad and
+selective bounds, rectangular covers, concave interiors, holes, a bound above
+the certified-rectangle coordinate limit, and reversed binding direction. Mixed
+data additionally uses both CRS84 and projected bounds. Concave-bound names
+describe shape dimensions; they do not promise particular pruning percentages.
+
+The local runner records the dataset metadata and checks all indexed/scalar
+result hashes, known zero/full results, and corpus size. Recheck a saved run:
+
+```sh
+python3 scripts/validate-synthetic-results.py \
+  .local-benchmarks/datasets/mixed-uniform-100k \
+  benchmark-results/local/mixed-uniform-baseline/v2
+
+BENCHMARK_MANIFEST="$PWD/.local-benchmarks/datasets/mixed-uniform-100k/queries/manifest.json" \
+  task benchmark:compare-local BASELINE=benchmark-results/local/mixed-uniform-baseline \
+  CANDIDATE=benchmark-results/local/mixed-uniform-candidate
+
+python3 tests/test-synthetic-datasets.py
+```
+
+Start with a small dataset (for example `--count 1200`) before timing 100,000
+geometries. Compare the same generated dataset, query definitions, runtime,
+index settings and measurement protocol across builds. Baseline output
+differences must be reported as correctness differences; timings for different
+outputs are not like-for-like speedups. Synthetic coverage supplements the
+Maldives real-world workload. It does not establish universal CRS correctness.
+
+Four further profiles place the same source types in other source CRSs:
+
+| `--profile` | Sources | Location |
+| --- | --- | --- |
+| `epsg4326` | EPSG:4326, latitude first | Same positions as `native` |
+| `gda2020` | EPSG:7844, latitude first | Near Brisbane |
+| `mga56` | EPSG:7856, MGA2020 zone 56 (transverse Mercator) | Near Brisbane |
+| `mixed-mga56` | Alternating CRS84 and EPSG:7856 blocks | Near Brisbane |
+
+Their unlabelled bounds use the profile's own CRS. The three single-CRS
+profiles add `*-native-bound` queries with a CRS84 bound; `mixed-mga56` adds
+explicit CRS84 and EPSG:7856 bounds as `mixed` does. The MGA grid is laid out
+in EPSG:7856 metres, so a bound that is a rectangle there is not a rectangle
+in CRS84. `native`, `projected` and `mixed` keep their original files for the
+same arguments.
+
+`--extent` sets the side of the square that holds the sources, in map units
+of the profile's grid (default 10000). Source sizes stay the same and the
+query bounds scale with it. The default square is about 0.09 by 0.045 degrees,
+a two-by-two block of prefix cells at QUAD precision 11; `--extent 500000`
+spreads the same sources over several hundred cells. Record the extent with
+any comparison: lookup selectivity depends on it. On a wide `mixed-mga56`
+square the cover bound reaches further past the square, because MGA grid
+lines are curved in CRS84 and the bound must still contain every source.
+
+### Targeted query workloads
+
+Use separate controlled fixtures to exercise specific lookup and evaluation
+paths without changing the distribution-profile baselines:
+
+```sh
+python3 scripts/generate-targeted-dataset.py \
+  .local-benchmarks/datasets/paging-10k --workload paging --count 10000
+
+BENCHMARK_DATASET_DIR="$PWD/.local-benchmarks/datasets/paging-10k" \
+  task benchmark:local PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=paging-baseline
+```
+
+| `--workload` | Coverage |
+| --- | --- |
+| `paging` | 998/1000/1002 native candidate documents, broad traversal, and a Feature with 1001 source geometries spanning a page |
+| `pruning` | Native CRS84 disjoint queries with 49%, 50% and 51% certified exclusions around the strict-half selection threshold |
+| `equality` | Matching lines and polygons, equal-envelope nonmatches, and unrelated envelopes |
+| `large-geometries` | Dense polygons with thousands of vertices, hull-rejectable envelope false positives, holes, and true intersections |
+| `mixed-crs` | CRS84/EPSG:3857 source mixtures with native and projected bounds in both argument orders |
+| `bound-batch` | Fully bound literal relations and scalar references batched with `VALUES`, avoiding index traversal |
+| `topology` | Controlled shared-edge touches, line/line and line/area crosses, and polygon overlaps |
+| `guardrails` | Fixed 13-source checks for empties, collections, antimeridian and near-pole geometry, including EPSG:3031 |
+| `join` | 100 zones and the remaining sources as sites; entity-to-entity relations where every zone or site drives one index lookup |
+| `filtered` | A spatial relation combined with a rare or common ordinary triple pattern, plus `LIMIT 10` variants |
+
+Counts are geometry resources, each with one source geometry literal. Features
+are separate entities. The paging workload associates several Geometry
+resources with each Feature; its scalar reference uses `FILTER EXISTS` over
+all default geometries. This preserves existential entity semantics and returns
+every projected geometry row for a matching Feature, including a source that
+does not itself satisfy the relation. Comparing only the displayed WKT would
+give an incorrect reference.
+
+Half of the `join` zones are concave, so sites in the notched quarter are
+inside a zone's envelope and outside its polygon. Its `?wkt` column is the
+zone, which identifies the pair. The disjoint join is limited to one row of
+ten zones to keep the result near ten rows per site. `join` and `filtered`
+place at most 10000 distinct points.
+
+A `LIMIT` query without an order may return any matching rows, so the
+`filtered` limited queries have no scalar reference pair. They are written to
+`limit-queries/` with their own manifest, outside the validated suite; check
+that each returns exactly its limit and only rows of the full query it names.
+
+Use counts divisible by 100, at least 1500 for `paging`, 200 for `join` and
+100 for other scalable workloads. Defaults are 10000, or 1000 for `bound-batch`; batches are
+limited to 10000 pairs per HTTP request. `guardrails` has a fixed small corpus:
+omit `--count`. The large-geometry fixture caps its complex-source cohort at 64
+and increases the simple background when the count grows. Increasing its count
+does not increase every source's vertex count.
+
+`--profile projected` is available for paging, equality, large geometries,
+topology and bound batches. Paging's 998/1000/1002 candidate counts apply only to
+native lookup; projected prefix-cell lookup can retain more candidates.
+Pruning requires `native`; mixed-CRS and guardrail fixtures select their own
+source CRSs. Source and query literals retain their CRS and argument order.
+
+The local runner preserves collections when the dataset requests it. The
+Maldives workflow keeps its existing collection-removal policy. To initialise
+a guardrail dataset manually through `benchmark:initialise-local`, pass
+`PRESERVE_GEOMETRY_COLLECTIONS=true`; its corpus check rejects a run that loses
+the collection sources. Guardrails measure a small supported fixture, not
+collection or polar performance at large scale.
+
+Validate these runs with the same `validate-synthetic-results.py` command.
+Known row counts supplement complete indexed/reference result hashes. Keep
+the fixed guardrails small while scaling the distribution and relevant
+targeted workloads. Check generation and validation logic with:
+
+```sh
+python3 tests/test-synthetic-datasets.py
+python3 tests/test-targeted-datasets.py
+```
+
 ## Run a complete comparison
+
+For comparisons between two builds of the Jena-backed plugin, use the local
+workflow below. The original v1/v2 workflow compares the bundled implementation
+with the replacement plugin and retains its declared semantic differences.
 
 Configure the license for both variants before beginning. Then run these
 commands in order:
@@ -143,6 +316,86 @@ The repetition counts are configurable, but must be identical for v1 and v2:
 ```sh
 BENCHMARK_WARMUPS=1 BENCHMARK_RUNS=5 task benchmark:all
 ```
+
+## Benchmark a local plugin working tree
+
+The local workflow builds the plugin from its working tree, including
+uncommitted edits and new source files. Neither repository needs to be committed
+or pushed. Maven may still download dependencies from its configured repositories.
+
+In addition to the prerequisites above, install Maven and the JDK required by
+the plugin checkout, including `jar` on `PATH`. Current plugin master targets
+Java 25 and the GraphDB 12 SDK. Configure authorized Maven access for any restricted
+SDK dependencies, and select a GraphDB runtime image that supports the resulting
+plugin and Java bytecode. SDK version strings do not necessarily name published
+Docker images.
+
+From this benchmark checkout, configure the runtime and build tools. Replace
+the example image and license paths with your available inputs:
+
+```sh
+export JAVA_HOME="$HOME/.jdks/openjdk-25.0.1"
+export PATH="$JAVA_HOME/bin:$PATH"
+export GRAPHDB_IMAGE=your-registry/graphdb:12-java25
+export BENCHMARK_GRAPHDB_VERSION=12.0.0
+export GRAPHDB_LICENSE_FILE=/path/to/graphdb.license
+export BENCHMARK_WARMUPS=2
+export BENCHMARK_RUNS=5
+```
+
+`GRAPHDB_IMAGE` and `BENCHMARK_GRAPHDB_VERSION` are required for local runs. The
+version must identify the GraphDB distribution in that image. The workflow also
+records the actual runtime image ID, plugin image ID and `java -version` output.
+`GRAPHDB_LICENSE_FILE` is optional when the selected runtime supplies its license
+or does not require one. When supplied, the file is copied into the run's GraphDB
+home without displaying its contents.
+
+First use an unchanged plugin checkout for the baseline:
+
+```sh
+task benchmark:local \
+  PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=master-baseline
+```
+
+After making local plugin changes, run the same command with a new name:
+
+```sh
+task benchmark:local \
+  PLUGIN_DIR=../graphdb-projects/graphdb-geosparql-plugin \
+  RUN_NAME=envelope-filter
+
+task benchmark:compare-local \
+  BASELINE=benchmark-results/local/master-baseline \
+  CANDIDATE=benchmark-results/local/envelope-filter
+```
+
+Each run builds one plugin ZIP and one container image, creates a separate
+GraphDB home, and imports and indexes a fresh repository. It saves results under
+`benchmark-results/local/RUN_NAME/v2/`, then stops its container on success or
+failure. Existing run names are rejected to preserve the baseline, including
+partial runs. Use a new name when retrying a failed run. The original migration
+results under `benchmark-results/v1` and `benchmark-results/v2` are preserved.
+
+Plugin archives, source metadata and GraphDB homes live under the ignored
+`.local-benchmarks/` directory. `BENCHMARK_LOCAL_DIR` can relocate these files;
+`BENCHMARK_RESULTS_DIR` can relocate the parent directory containing named local
+results. Each result records the source commit, dirty status, ZIP SHA-256 and
+build-tool versions. A ZIP checksum identifies the built artifact, including
+changes not represented by the commit alone. Maven runs `clean package` with
+tests skipped; run the plugin's relevant correctness tests separately.
+
+The local comparison requires identical canonical output for **every** query.
+Migration exceptions for crossing and equality do not apply. It also rejects
+different GraphDB versions, runtime image IDs, Java runtimes, prefix trees,
+precisions, repetition counts, query definitions or geometry corpora. The report
+is saved as `CANDIDATE/comparison.md` and labels the builds baseline/candidate.
+
+Both workflows use localhost port 7200 by default; stop other services using
+that port before running. Set `GRAPHDB_PORT` to use another local port for a
+local run. Local tasks do not stop containers belonging to the migration workflow.
+
+## Migration report validation
 
 `task benchmark:report` refuses incomplete, stale, or differently configured
 suites. Staleness is detected from a fingerprint covering the manifest, every

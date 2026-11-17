@@ -22,9 +22,45 @@ The comparison covers:
 The primary suite uses the Maldives OSM dataset and tests the public
 index-backed `geo:` property relations. It includes targeted scalar `geof:`
 baselines for measuring index effectiveness at two selectivity levels.
-Controlled fixtures for projected coordinate systems, geometry collections,
-Egenhofer, RCC8, DE-9IM, and incremental updates are outside the primary suite
-and will be considered separately.
+The optional synthetic suite adds controlled CRS84, EPSG:3857 and mixed-CRS
+workloads with balanced geometry types and uniform or clustered placement.
+Every indexed query is paired with a scalar reference, and construction gives
+known empty/full results for cover and outside bounds. Generated data, queries,
+configuration, source counts and checksums are recorded together. It is a
+separate workload, not a replacement for the Maldives comparison. See the
+synthetic dataset commands in README.md.
+
+Controlled targeted fixtures additionally exercise paging and entity grouping,
+the certified-pruning threshold, equality, large polygon payloads, both
+mixed-CRS argument orders, batched fully bound/scalar evaluation, and boundary
+topology. A separate fixed small guardrail fixture checks empty and collection
+sources and antimeridian/polar cases. Egenhofer, RCC8, DE-9IM, incremental updates
+and large-scale collection workloads remain outside these performance suites.
+
+Targeted fixtures record known result counts and the intended native candidate
+counts where construction makes those predictable. Paging's reference tests
+whether any default geometry of a Feature satisfies the relation, then retains
+all projected rows for that Feature. Indexed and scalar queries therefore
+compare entity-level results rather than independently filtering each displayed
+source literal. See README.md for the workload matrix and generation commands.
+
+## Comparing local builds
+
+`task benchmark:local` runs the same query and corpus protocol against a plugin
+built from a local working tree. Named runs have separate GraphDB homes and
+result directories. The source commit, dirty status, built ZIP checksum,
+build-tool versions, runtime image IDs and runtime Java version are recorded.
+The runtime image and GraphDB version are explicit inputs, allowing a compatible
+host for the plugin checkout without changing the migration defaults.
+
+`task benchmark:compare-local` compares two named runs under an `identical`
+output contract: every query must match, including queries with declared
+migration differences. Both runs must use the same runtime image ID, Java
+runtime, GraphDB version, index settings, query definitions and repetition counts.
+The existing corpus, indexed/scalar equivalence and intersects/disjoint partition
+checks also apply. Use an unchanged checkout as the baseline before changing the
+plugin; retain it when running the modified working tree. See the local workflow
+in [README.md](README.md#benchmark-a-local-plugin-working-tree) for commands.
 
 ## Controlled environment
 
@@ -42,6 +78,8 @@ Before indexing, both variants remove every `geo:asWKT` literal whose lexical
 form contains `GEOMETRYCOLLECTION`. This gives both implementations the same
 queryable geometry corpus because v1 cannot evaluate those values reliably.
 Geometry-collection support is therefore not measured by the primary suite.
+The targeted guardrail fixture explicitly preserves its collection literals;
+its complete corpus and indexed/reference checks must pass with those inputs.
 
 The v2 `master` branch is resolved to a Git commit before its suite starts. The
 same commit is used for every v2 build and query in that run and is recorded in
@@ -121,6 +159,8 @@ Sorting and hashing happen in the client after the timed HTTP request.
 | `geof-intersects-selective-region` | `FILTER(geof:sfIntersects(?wkt, SELECTIVE_REGION))` | Full-scan baseline for selective regional intersection |
 | `sf-disjoint-region` | `?geometry geo:sfDisjoint REGION` | High-cardinality disjoint evaluation with substantial result transfer |
 | `sf-disjoint-cover` | `?geometry geo:sfDisjoint DATASET_COVER` | Zero-result disjoint evaluation with minimal response-transfer cost |
+| `sf-disjoint-skew-zero` | `?geometry geo:sfDisjoint SKEW_ZERO` | Zero-result disjoint evaluation against a non-rectangular bound |
+| `sf-disjoint-skew-six` | `?geometry geo:sfDisjoint SKEW_SIX` | Few-result disjoint evaluation against a non-rectangular bound |
 | `sf-contains-point` | `?geometry geo:sfContains INTERIOR_POINT` | Selective inverse relation |
 | `sf-touches-vertex` | `?geometry geo:sfTouches VERTEX_POINT` | Boundary-sensitive exact evaluation |
 | `sf-crosses-line` | `?geometry geo:sfCrosses CROSSING_LINE` | Behavioural comparison of asymmetric GeoSPARQL and symmetric JTS crossing semantics |
@@ -152,6 +192,13 @@ transfer. `sf-disjoint-cover` uses a polygon that covers the retained dataset
 and therefore returns no rows. This isolates the server-side candidate
 selection and relation-evaluation cost from JSON serialisation and transfer
 without assuming that either implementation uses a particular index strategy.
+
+`sf-disjoint-skew-zero` and `sf-disjoint-skew-six` cut one corner off that
+polygon diagonally. An index can tell from envelopes alone that a source lies
+inside a rectangle, but not inside a polygon with a cut corner, so these cases
+measure disjoint evaluation when most sources are inside the bound and that has
+to be shown another way. The cut leaves no source wholly in the removed corner
+for `sf-disjoint-skew-zero`, and six for `sf-disjoint-skew-six`.
 
 The original `sf-crosses-line` and `sf-equals-point` cases are retained as
 behavioural comparisons because their outputs differ between the
@@ -202,6 +249,14 @@ POLYGON((49 -2, 81 -2, 81 27, 49 27, 49 -2))
 All source WKT coordinates fall strictly inside this polygon. The calibrated
 `sf-disjoint-cover` result is empty for both variants, while each implementation
 still exercises its relation-specific candidate path.
+
+`SKEW_ZERO` and `SKEW_SIX` are `DATASET_COVER` with its north-east corner cut
+off diagonally:
+
+```text
+POLYGON((49 -2, 81 -2, 81 14.0019852, 68.0019852 27, 49 27, 49 -2))
+POLYGON((49 -2, 81 -2, 81 13.98848595, 67.98848595 27, 49 27, 49 -2))
+```
 
 The calibrated `SELECTIVE_REGION` is:
 

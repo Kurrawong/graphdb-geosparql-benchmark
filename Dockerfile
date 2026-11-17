@@ -1,4 +1,6 @@
-FROM maven:3.9.11-eclipse-temurin-21 AS plugin-builder
+ARG MAVEN_IMAGE=maven:3.9.11-eclipse-temurin-21
+ARG GRAPHDB_IMAGE=ontotext/graphdb:11.4.0
+FROM ${MAVEN_IMAGE} AS plugin-builder
 
 ARG GEOSPARQL_V2_REPOSITORY=https://github.com/Kurrawong/graphdb-geosparql-plugin.git
 ARG GEOSPARQL_V2_REF=master
@@ -16,7 +18,7 @@ RUN mvn --batch-mode clean package \
     && cd target/docker-plugin \
     && jar xf ../geosparql-plugin-graphdb-plugin.zip
 
-FROM ontotext/graphdb:11.4.0
+FROM ${GRAPHDB_IMAGE}
 
 USER root
 
