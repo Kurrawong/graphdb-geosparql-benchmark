@@ -151,7 +151,7 @@ generate_report() {
     "$repository_dir/queries/manifest.json" "$BENCHMARK_RESULTS_DIR" "$report"
 }
 generate_report >/dev/null
-grep -Fq '19 matching, 0 expected differences, 0 unexpected results' "$report"
+grep -Fq '21 matching, 0 expected differences, 0 unexpected results' "$report"
 grep -Fq '| Query | baseline median (range) | candidate median (range)' "$report"
 grep -Fq 'GraphDB: 12-test' "$report"
 

@@ -60,6 +60,16 @@
       "description": "Zero-result disjoint evaluation against a dataset-covering polygon"
     },
     {
+      "id": "sf-disjoint-skew-zero",
+      "file": "sf-disjoint-skew-zero.rq",
+      "description": "Zero-result disjoint evaluation against the dataset-covering polygon with one corner cut off"
+    },
+    {
+      "id": "sf-disjoint-skew-six",
+      "file": "sf-disjoint-skew-six.rq",
+      "description": "Six-result disjoint evaluation against the dataset-covering polygon with a larger corner cut off"
+    },
+    {
       "id": "sf-contains-point",
       "file": "sf-contains-point.rq",
       "description": "Selective inverse containment relation"

@@ -159,6 +159,8 @@ Sorting and hashing happen in the client after the timed HTTP request.
 | `geof-intersects-selective-region` | `FILTER(geof:sfIntersects(?wkt, SELECTIVE_REGION))` | Full-scan baseline for selective regional intersection |
 | `sf-disjoint-region` | `?geometry geo:sfDisjoint REGION` | High-cardinality disjoint evaluation with substantial result transfer |
 | `sf-disjoint-cover` | `?geometry geo:sfDisjoint DATASET_COVER` | Zero-result disjoint evaluation with minimal response-transfer cost |
+| `sf-disjoint-skew-zero` | `?geometry geo:sfDisjoint SKEW_ZERO` | Zero-result disjoint evaluation against a non-rectangular bound |
+| `sf-disjoint-skew-six` | `?geometry geo:sfDisjoint SKEW_SIX` | Few-result disjoint evaluation against a non-rectangular bound |
 | `sf-contains-point` | `?geometry geo:sfContains INTERIOR_POINT` | Selective inverse relation |
 | `sf-touches-vertex` | `?geometry geo:sfTouches VERTEX_POINT` | Boundary-sensitive exact evaluation |
 | `sf-crosses-line` | `?geometry geo:sfCrosses CROSSING_LINE` | Behavioural comparison of asymmetric GeoSPARQL and symmetric JTS crossing semantics |
@@ -190,6 +192,13 @@ transfer. `sf-disjoint-cover` uses a polygon that covers the retained dataset
 and therefore returns no rows. This isolates the server-side candidate
 selection and relation-evaluation cost from JSON serialisation and transfer
 without assuming that either implementation uses a particular index strategy.
+
+`sf-disjoint-skew-zero` and `sf-disjoint-skew-six` cut one corner off that
+polygon diagonally. An index can tell from envelopes alone that a source lies
+inside a rectangle, but not inside a polygon with a cut corner, so these cases
+measure disjoint evaluation when most sources are inside the bound and that has
+to be shown another way. The cut leaves no source wholly in the removed corner
+for `sf-disjoint-skew-zero`, and six for `sf-disjoint-skew-six`.
 
 The original `sf-crosses-line` and `sf-equals-point` cases are retained as
 behavioural comparisons because their outputs differ between the
@@ -240,6 +249,14 @@ POLYGON((49 -2, 81 -2, 81 27, 49 27, 49 -2))
 All source WKT coordinates fall strictly inside this polygon. The calibrated
 `sf-disjoint-cover` result is empty for both variants, while each implementation
 still exercises its relation-specific candidate path.
+
+`SKEW_ZERO` and `SKEW_SIX` are `DATASET_COVER` with its north-east corner cut
+off diagonally:
+
+```text
+POLYGON((49 -2, 81 -2, 81 14.0019852, 68.0019852 27, 49 27, 49 -2))
+POLYGON((49 -2, 81 -2, 81 13.98848595, 67.98848595 27, 49 27, 49 -2))
+```
 
 The calibrated `SELECTIVE_REGION` is:
 
